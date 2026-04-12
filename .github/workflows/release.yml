@@ -1,0 +1,125 @@
+name: Release (macOS + Windows)
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest-xlarge
+            target: aarch64-apple-darwin
+            label: macOS-arm64
+            binary: tv-mcp
+            asset: tv-mcp-aarch64-apple-darwin
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            label: Windows-x64
+            binary: tv-mcp.exe
+            asset: tv-mcp-x86_64-pc-windows-msvc.exe
+
+    runs-on: ${{ matrix.platform }}
+    name: Build (${{ matrix.label }})
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+
+      - name: Build release
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Collect artifact
+        shell: bash
+        run: |
+          mkdir -p collected
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "collected/${{ matrix.asset }}"
+          echo "Collected:"
+          ls -la collected/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: collected/${{ matrix.asset }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    name: Create Release
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          PREV_TAG=$(git tag --sort=-creatordate | grep '^v' | sed -n '2p')
+          if [ -z "$PREV_TAG" ]; then
+            CHANGELOG=$(git log --oneline --no-merges --format="- %s" HEAD)
+          else
+            CHANGELOG=$(git log --oneline --no-merges --format="- %s" "${PREV_TAG}..HEAD")
+          fi
+          CHANGELOG=$(echo "$CHANGELOG" | grep -v "^- Co-Authored-By" | head -30 || true)
+          {
+            echo "notes<<CHANGELOG_EOF"
+            echo "$CHANGELOG"
+            echo "CHANGELOG_EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dl
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          find dl -type f -exec cp {} release/ \;
+          echo "Release files:"
+          ls -la release/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: tv-mcp ${{ steps.version.outputs.version }}
+          body: |
+            ## What's New
+
+            ${{ steps.changelog.outputs.notes }}
+
+            ## Install
+
+            ```bash
+            curl -sSL https://raw.githubusercontent.com/FrontToBackCulture/tv-mcp/main/install.sh | bash
+            ```
+
+            Or download the binary for your platform below, place it at `~/.tv-mcp/bin/tv-mcp`, and make it executable.
+
+            | Platform | Binary |
+            |----------|--------|
+            | macOS (Apple Silicon) | `tv-mcp-aarch64-apple-darwin` |
+            | Windows (x64) | `tv-mcp-x86_64-pc-windows-msvc.exe` |
+          files: release/*
+          draft: false
+          prerelease: false
