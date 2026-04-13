@@ -76,12 +76,17 @@ pub async fn work_create_task(data: CreateTask) -> CmdResult<Task> {
 
     let next_number = project.next_task_number.unwrap_or(1);
 
-    // Build insert data
+    // Leave description_json null — tv-client's TaskDetailPanel falls back to
+    // ReactMarkdown on the plain description column when description_json is null,
+    // which handles markdown (bold, links, lists, etc.) correctly. The previous
+    // pulldown_cmark-based conversion often emitted raw markdown as literal text
+    // nodes, so relying on the markdown fallback is simpler and more reliable.
     let insert_data = serde_json::json!({
         "project_id": data.project_id,
         "status_id": data.status_id,
         "title": data.title,
         "description": data.description,
+        "description_json": serde_json::Value::Null,
         "priority": data.priority.unwrap_or(0),
         "due_date": data.due_date,
         "milestone_id": data.milestone_id,
@@ -100,7 +105,7 @@ pub async fn work_create_task(data: CreateTask) -> CmdResult<Task> {
 
     // Increment project's next_task_number
     let update_data = serde_json::json!({ "next_task_number": next_number + 1 });
-    let _: Project = client
+    let _: serde_json::Value = client
         .update("projects", &format!("id=eq.{}", data.project_id), &update_data)
         .await?;
 
@@ -142,49 +147,46 @@ pub async fn work_update_task(task_id: String, data: UpdateTask) -> CmdResult<Ta
         }
     }
 
+    let mut update_data = serde_json::to_value(&data)?;
+
+    // If description is being updated, clear description_json so the UI falls
+    // back to ReactMarkdown on the fresh markdown. See work_create_task for why.
+    if data.description.is_some() {
+        if let Some(obj) = update_data.as_object_mut() {
+            obj.insert("description_json".to_string(), serde_json::Value::Null);
+        }
+    }
+
     // If task_type is changing, update task_type_changed_at
     if data.task_type.is_some() {
-        let mut update_data = serde_json::to_value(&data)?;
         if let Some(obj) = update_data.as_object_mut() {
             obj.insert(
                 "task_type_changed_at".to_string(),
                 serde_json::Value::String(chrono::Utc::now().to_rfc3339()),
             );
         }
-        let _: Task = client
-            .update("tasks", &format!("id=eq.{}", task_id), &update_data)
-            .await?;
-        return work_get_task(task_id).await;
     }
 
     // Check if status is changing to completed
     if let Some(status_id) = &data.status_id {
-        // Get the new status to check its type
         let status: Option<TaskStatus> = client
             .select_single("task_statuses", &format!("id=eq.{}", status_id))
             .await?;
 
         if let Some(s) = status {
             if s.status_type == "completed" {
-                // Set completed_at timestamp
-                let mut update_data = serde_json::to_value(&data)?;
                 if let Some(obj) = update_data.as_object_mut() {
                     obj.insert(
                         "completed_at".to_string(),
                         serde_json::Value::String(chrono::Utc::now().to_rfc3339()),
                     );
                 }
-
-                let _: Task = client
-                    .update("tasks", &format!("id=eq.{}", task_id), &update_data)
-                    .await?;
-                return work_get_task(task_id).await;
             }
         }
     }
 
-    let _: Task = client
-        .update("tasks", &format!("id=eq.{}", task_id), &data)
+    let _: serde_json::Value = client
+        .update("tasks", &format!("id=eq.{}", task_id), &update_data)
         .await?;
 
     work_get_task(task_id).await
@@ -354,7 +356,7 @@ pub async fn work_apply_triage(
         update_data["triage_context_matches"] = serde_json::Value::Null;
     }
 
-    let _: Task = client
+    let _: serde_json::Value = client
         .update("tasks", &format!("id=eq.{}", task_id), &update_data)
         .await?;
 

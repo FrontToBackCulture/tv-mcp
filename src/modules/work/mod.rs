@@ -10,6 +10,7 @@ pub mod labels;
 pub mod users;
 pub mod sessions;
 pub mod skills;
+pub mod markdown;
 
 #[allow(unused_imports)]
 pub use types::*;
