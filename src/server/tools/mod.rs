@@ -14,6 +14,7 @@ pub mod notifications;
 pub mod blog;
 pub mod whatsapp;
 pub mod apollo;
+pub mod diagnostics;
 
 use super::protocol::{Tool, ToolResult};
 use serde_json::Value;
@@ -60,6 +61,9 @@ pub fn list_tools() -> Vec<Tool> {
 
     // Apollo prospect search tools
     tools.extend(apollo::tools());
+
+    // Diagnostics tools
+    tools.extend(diagnostics::tools());
 
     tools
 }
@@ -151,6 +155,11 @@ pub async fn call_tool(name: &str, arguments: Value) -> ToolResult {
     // Apollo prospect search tools
     if name.starts_with("apollo-") {
         return apollo::call(name, arguments).await;
+    }
+
+    // Diagnostics
+    if name == "diagnostics" {
+        return diagnostics::call(name, arguments).await;
     }
 
     ToolResult::error(format!("Unknown tool: {}", name))

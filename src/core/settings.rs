@@ -145,14 +145,28 @@ pub struct SettingsStatus {
 fn get_settings_dir() -> PathBuf {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     let tv_mcp_dir = home.join(".tv-mcp");
-    if tv_mcp_dir.join("settings.json").exists() {
+    let tv_desktop_dir = home.join(".tv-desktop");
+
+    let tv_mcp_file = tv_mcp_dir.join("settings.json");
+    let tv_desktop_file = tv_desktop_dir.join("settings.json");
+
+    // Auto-migrate: if legacy file exists but new one doesn't, copy it over
+    if !tv_mcp_file.exists() && tv_desktop_file.exists() {
+        let _ = fs::create_dir_all(&tv_mcp_dir);
+        if let Ok(content) = fs::read_to_string(&tv_desktop_file) {
+            let _ = fs::write(&tv_mcp_file, content);
+        }
+    }
+
+    if tv_mcp_file.exists() {
         return tv_mcp_dir;
     }
-    // Fall back to tv-desktop settings for backward compat
-    let tv_desktop_dir = home.join(".tv-desktop");
-    if tv_desktop_dir.join("settings.json").exists() {
+
+    // Fall back to tv-desktop if migration failed
+    if tv_desktop_file.exists() {
         return tv_desktop_dir;
     }
+
     // Default to .tv-mcp for new installs
     tv_mcp_dir
 }
