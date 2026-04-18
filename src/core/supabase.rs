@@ -266,8 +266,11 @@ pub fn client_from(url: &str, anon_key: &str) -> SupabaseClient {
 
 use std::sync::OnceLock;
 
-/// Cached bot JWT token (minted on first use, refreshed when expired)
-static BOT_JWT: OnceLock<std::sync::Mutex<Option<BotToken>>> = OnceLock::new();
+/// Cached bot JWT tokens — one per (api_key, workspace_id). We key by
+/// workspace_id because a single bot may have access to multiple workspaces
+/// and each needs a separately-signed JWT.
+static BOT_JWT_CACHE: OnceLock<std::sync::Mutex<std::collections::HashMap<String, BotToken>>> =
+    OnceLock::new();
 
 #[derive(Clone)]
 struct BotToken {
@@ -279,12 +282,17 @@ struct BotToken {
 const GATEWAY_URL: &str = "https://tccyronrnsimacqfhxzd.supabase.co";
 
 /// Authenticate with the gateway using the bot API key and get a workspace JWT.
-async fn mint_bot_jwt(api_key: &str) -> CmdResult<BotToken> {
+/// If `workspace_id` is None, the gateway uses the bot's default (first) workspace membership.
+async fn mint_bot_jwt(api_key: &str, workspace_id: Option<&str>) -> CmdResult<BotToken> {
     let client = crate::HTTP_CLIENT.clone();
+    let mut body = serde_json::json!({ "api_key": api_key });
+    if let Some(ws) = workspace_id {
+        body["workspace_id"] = serde_json::json!(ws);
+    }
     let response = client
         .post(format!("{}/functions/v1/bot-token", GATEWAY_URL))
         .header("Content-Type", "application/json")
-        .json(&serde_json::json!({ "api_key": api_key }))
+        .json(&body)
         .send()
         .await?;
 
@@ -307,12 +315,16 @@ async fn mint_bot_jwt(api_key: &str) -> CmdResult<BotToken> {
     Ok(BotToken { token, expires_at })
 }
 
-/// Get the bot JWT, minting or refreshing if needed.
-async fn get_bot_jwt(api_key: &str) -> CmdResult<String> {
-    let mutex = BOT_JWT.get_or_init(|| std::sync::Mutex::new(None));
+/// Get the bot JWT, minting or refreshing if needed. Pass `workspace_id` when
+/// the caller knows which workspace the JWT needs to target — otherwise the
+/// gateway picks the bot's default (first) membership.
+async fn get_bot_jwt(api_key: &str, workspace_id: Option<&str>) -> CmdResult<String> {
+    let mutex = BOT_JWT_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let cache_key = workspace_id.unwrap_or("default").to_string();
+
     let existing = {
         let guard = mutex.lock().unwrap();
-        guard.clone()
+        guard.get(&cache_key).cloned()
     };
 
     let now = std::time::SystemTime::now()
@@ -328,11 +340,11 @@ async fn get_bot_jwt(api_key: &str) -> CmdResult<String> {
     }
 
     // Mint new JWT
-    let new_token = mint_bot_jwt(api_key).await?;
+    let new_token = mint_bot_jwt(api_key, workspace_id).await?;
     let token = new_token.token.clone();
     {
         let mut guard = mutex.lock().unwrap();
-        *guard = Some(new_token);
+        guard.insert(cache_key, new_token);
     }
     Ok(token)
 }
@@ -368,7 +380,7 @@ pub async fn get_client() -> CmdResult<SupabaseClient> {
         .ok()
         .flatten();
 
-    let (url, anon_key) = if let Some(workspace_id) = ws_override {
+    let (url, anon_key, ws_for_jwt) = if let Some(workspace_id) = ws_override {
         let url = get_workspace_setting(&workspace_id, KEY_SUPABASE_URL).ok_or_else(|| {
             CommandError::Config(format!(
                 "Supabase URL not configured for workspace {}",
@@ -383,7 +395,7 @@ pub async fn get_client() -> CmdResult<SupabaseClient> {
                 ))
             },
         )?;
-        (url, anon_key)
+        (url, anon_key, Some(workspace_id))
     } else {
         let url = settings_get_key(KEY_SUPABASE_URL.to_string())?.ok_or_else(|| {
             CommandError::Config("Supabase URL not configured. Go to Settings to add it.".into())
@@ -393,13 +405,13 @@ pub async fn get_client() -> CmdResult<SupabaseClient> {
                 "Supabase anon key not configured. Go to Settings to add it.".into(),
             )
         })?;
-        (url, anon_key)
+        (url, anon_key, None)
     };
 
     // If bot API key is set, authenticate and use JWT
     if let Ok(api_key) = std::env::var("TV_BOT_API_KEY") {
         if !api_key.is_empty() {
-            let jwt = get_bot_jwt(&api_key).await?;
+            let jwt = get_bot_jwt(&api_key, ws_for_jwt.as_deref()).await?;
             return Ok(SupabaseClient::new_with_token(&url, &anon_key, &jwt));
         }
     }
@@ -430,7 +442,7 @@ pub async fn get_client_for_workspace(workspace_id: &str) -> CmdResult<SupabaseC
 
     if let Ok(api_key) = std::env::var("TV_BOT_API_KEY") {
         if !api_key.is_empty() {
-            let jwt = get_bot_jwt(&api_key).await?;
+            let jwt = get_bot_jwt(&api_key, Some(workspace_id)).await?;
             return Ok(SupabaseClient::new_with_token(&url, &anon_key, &jwt));
         }
     }

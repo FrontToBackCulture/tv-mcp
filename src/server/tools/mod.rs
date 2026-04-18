@@ -15,6 +15,8 @@ pub mod blog;
 pub mod whatsapp;
 pub mod apollo;
 pub mod diagnostics;
+pub mod fy_review;
+pub mod qbo;
 
 use super::protocol::{Tool, ToolResult};
 use serde_json::Value;
@@ -64,6 +66,12 @@ pub fn list_tools() -> Vec<Tool> {
 
     // Diagnostics tools
     tools.extend(diagnostics::tools());
+
+    // QBO (mgmt workspace) tools
+    tools.extend(qbo::tools());
+
+    // FY Review (mgmt workspace) tools
+    tools.extend(fy_review::tools());
 
     tools
 }
@@ -160,6 +168,16 @@ pub async fn call_tool(name: &str, arguments: Value) -> ToolResult {
     // Diagnostics
     if name == "diagnostics" {
         return diagnostics::call(name, arguments).await;
+    }
+
+    // QBO tools (mgmt workspace)
+    if name.starts_with("qbo-") {
+        return qbo::call(name, arguments).await;
+    }
+
+    // FY Review tools (mgmt workspace)
+    if name.starts_with("fy-") {
+        return fy_review::call(name, arguments).await;
     }
 
     ToolResult::error(format!("Unknown tool: {}", name))
