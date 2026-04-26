@@ -10,7 +10,7 @@ pub fn tools() -> Vec<Tool> {
     vec![
         // Companies
         Tool {
-            name: "list-crm-companies".to_string(),
+            name: "list-companies".to_string(),
             description: "List companies in the CRM with optional filters".to_string(),
             input_schema: InputSchema::with_properties(
                 json!({
@@ -23,7 +23,7 @@ pub fn tools() -> Vec<Tool> {
             ),
         },
         Tool {
-            name: "find-crm-company".to_string(),
+            name: "find-company".to_string(),
             description: "Find a company by name or domain. Use this before creating to avoid duplicates.".to_string(),
             input_schema: InputSchema::with_properties(
                 json!({
@@ -34,7 +34,7 @@ pub fn tools() -> Vec<Tool> {
             ),
         },
         Tool {
-            name: "get-crm-company".to_string(),
+            name: "get-company".to_string(),
             description: "Get full details for a company by ID, including contacts and recent activity.".to_string(),
             input_schema: InputSchema::with_properties(
                 json!({
@@ -45,8 +45,8 @@ pub fn tools() -> Vec<Tool> {
             ),
         },
         Tool {
-            name: "create-crm-company".to_string(),
-            description: "Create a new company in the CRM. Use find-crm-company first to check if it exists.".to_string(),
+            name: "create-company".to_string(),
+            description: "Create a new company in the CRM. Use find-company first to check if it exists.".to_string(),
             input_schema: InputSchema::with_properties(
                 json!({
                     "name": { "type": "string", "description": "Company name (required)" },
@@ -62,7 +62,7 @@ pub fn tools() -> Vec<Tool> {
             ),
         },
         Tool {
-            name: "update-crm-company".to_string(),
+            name: "update-company".to_string(),
             description: "Update an existing company's details.".to_string(),
             input_schema: InputSchema::with_properties(
                 json!({
@@ -84,7 +84,7 @@ pub fn tools() -> Vec<Tool> {
             ),
         },
         Tool {
-            name: "delete-crm-company".to_string(),
+            name: "delete-company".to_string(),
             description: "Delete a company and all related records (contacts, activities).".to_string(),
             input_schema: InputSchema::with_properties(
                 json!({
@@ -95,7 +95,7 @@ pub fn tools() -> Vec<Tool> {
         },
         // Contacts
         Tool {
-            name: "list-crm-contacts".to_string(),
+            name: "list-contacts".to_string(),
             description: "List contacts, optionally filtered by company.".to_string(),
             input_schema: InputSchema::with_properties(
                 json!({
@@ -106,7 +106,7 @@ pub fn tools() -> Vec<Tool> {
             ),
         },
         Tool {
-            name: "find-crm-contact".to_string(),
+            name: "find-contact".to_string(),
             description: "Find a contact by email address.".to_string(),
             input_schema: InputSchema::with_properties(
                 json!({
@@ -116,7 +116,7 @@ pub fn tools() -> Vec<Tool> {
             ),
         },
         Tool {
-            name: "create-crm-contact".to_string(),
+            name: "create-contact".to_string(),
             description: "Create a new contact. Company is optional — omit for EDM-only contacts.".to_string(),
             input_schema: InputSchema::with_properties(
                 json!({
@@ -144,7 +144,7 @@ pub fn tools() -> Vec<Tool> {
             ),
         },
         Tool {
-            name: "update-crm-contact".to_string(),
+            name: "update-contact".to_string(),
             description: "Update an existing contact.".to_string(),
             input_schema: InputSchema::with_properties(
                 json!({
@@ -174,8 +174,8 @@ pub fn tools() -> Vec<Tool> {
         },
         // Activities (general — works for companies, projects, tasks, or standalone)
         Tool {
-            name: "log-activity".to_string(),
-            description: "Log an activity (note, call, meeting) for a company, project, or task.".to_string(),
+            name: "add-activity".to_string(),
+            description: "Log an activity entry (note, call, meeting, email, or task event). Activities can attach to any combination of company, contact, project, and task — pass the IDs you have. Use this for CRM call logs, project sessions, or any time-stamped record that needs to surface on multiple entity timelines.".to_string(),
             input_schema: InputSchema::with_properties(
                 json!({
                     "company_id": { "type": "string", "description": "Company UUID (optional)" },
@@ -239,7 +239,7 @@ pub fn tools() -> Vec<Tool> {
 pub async fn call(name: &str, args: Value) -> ToolResult {
     match name {
         // Companies
-        "list-crm-companies" => {
+        "list-companies" => {
             let search = args.get("search").and_then(|v| v.as_str()).map(|s| s.to_string());
             let stage = args.get("stage").and_then(|v| v.as_str()).map(|s| s.to_string());
             let industry = args.get("industry").and_then(|v| v.as_str()).map(|s| s.to_string());
@@ -249,7 +249,7 @@ pub async fn call(name: &str, args: Value) -> ToolResult {
                 Err(e) => ToolResult::error(e.to_string()),
             }
         }
-        "find-crm-company" => {
+        "find-company" => {
             let name = args.get("name").and_then(|v| v.as_str()).map(|s| s.to_string());
             let domain = args.get("domain").and_then(|v| v.as_str()).map(|s| s.to_string());
             match crm::crm_find_company(name, domain).await {
@@ -257,7 +257,7 @@ pub async fn call(name: &str, args: Value) -> ToolResult {
                 Err(e) => ToolResult::error(e.to_string()),
             }
         }
-        "get-crm-company" => {
+        "get-company" => {
             let company_id = match args.get("company_id").and_then(|v| v.as_str()) {
                 Some(id) => id.to_string(),
                 None => return ToolResult::error("company_id is required".to_string()),
@@ -268,7 +268,7 @@ pub async fn call(name: &str, args: Value) -> ToolResult {
                 Err(e) => ToolResult::error(e.to_string()),
             }
         }
-        "create-crm-company" => {
+        "create-company" => {
             let data: CreateCompany = match serde_json::from_value(args) {
                 Ok(d) => d,
                 Err(e) => return ToolResult::error(format!("Invalid parameters: {}", e)),
@@ -278,7 +278,7 @@ pub async fn call(name: &str, args: Value) -> ToolResult {
                 Err(e) => ToolResult::error(e.to_string()),
             }
         }
-        "update-crm-company" => {
+        "update-company" => {
             let company_id = match args.get("company_id").and_then(|v| v.as_str()) {
                 Some(id) => id.to_string(),
                 None => return ToolResult::error("company_id is required".to_string()),
@@ -296,7 +296,7 @@ pub async fn call(name: &str, args: Value) -> ToolResult {
                 Err(e) => ToolResult::error(e.to_string()),
             }
         }
-        "delete-crm-company" => {
+        "delete-company" => {
             let company_id = match args.get("company_id").and_then(|v| v.as_str()) {
                 Some(id) => id.to_string(),
                 None => return ToolResult::error("company_id is required".to_string()),
@@ -308,7 +308,7 @@ pub async fn call(name: &str, args: Value) -> ToolResult {
         }
 
         // Contacts
-        "list-crm-contacts" => {
+        "list-contacts" => {
             let company_id = args.get("company_id").and_then(|v| v.as_str()).map(|s| s.to_string());
             let search = args.get("search").and_then(|v| v.as_str()).map(|s| s.to_string());
             match crm::crm_list_contacts(company_id, search).await {
@@ -316,7 +316,7 @@ pub async fn call(name: &str, args: Value) -> ToolResult {
                 Err(e) => ToolResult::error(e.to_string()),
             }
         }
-        "find-crm-contact" => {
+        "find-contact" => {
             let email = match args.get("email").and_then(|v| v.as_str()) {
                 Some(e) => e.to_string(),
                 None => return ToolResult::error("email is required".to_string()),
@@ -326,7 +326,7 @@ pub async fn call(name: &str, args: Value) -> ToolResult {
                 Err(e) => ToolResult::error(e.to_string()),
             }
         }
-        "create-crm-contact" => {
+        "create-contact" => {
             let mut create_args = args.clone();
             if let Some(obj) = create_args.as_object_mut() {
                 // Fix prospect_type if passed as JSON string instead of array
@@ -347,7 +347,7 @@ pub async fn call(name: &str, args: Value) -> ToolResult {
                 Err(e) => ToolResult::error(e.to_string()),
             }
         }
-        "update-crm-contact" => {
+        "update-contact" => {
             let contact_id = match args.get("contact_id").and_then(|v| v.as_str()) {
                 Some(id) => id.to_string(),
                 None => return ToolResult::error("contact_id is required".to_string()),
@@ -375,7 +375,7 @@ pub async fn call(name: &str, args: Value) -> ToolResult {
         }
 
         // Activities
-        "log-activity" => {
+        "add-activity" => {
             let data: CreateActivity = match serde_json::from_value(args) {
                 Ok(d) => d,
                 Err(e) => return ToolResult::error(format!("Invalid parameters: {}", e)),
@@ -448,14 +448,14 @@ mod tests {
     #[test]
     fn create_company_requires_name() {
         let t = tools();
-        let tool = t.iter().find(|t| t.name == "create-crm-company").unwrap();
+        let tool = t.iter().find(|t| t.name == "create-company").unwrap();
         assert_eq!(tool.input_schema.required, Some(vec!["name".to_string()]));
     }
 
     #[test]
     fn get_company_requires_company_id() {
         let t = tools();
-        let tool = t.iter().find(|t| t.name == "get-crm-company").unwrap();
+        let tool = t.iter().find(|t| t.name == "get-company").unwrap();
         assert_eq!(
             tool.input_schema.required,
             Some(vec!["company_id".to_string()])
@@ -465,7 +465,7 @@ mod tests {
     #[test]
     fn create_contact_requires_name_and_email() {
         let t = tools();
-        let tool = t.iter().find(|t| t.name == "create-crm-contact").unwrap();
+        let tool = t.iter().find(|t| t.name == "create-contact").unwrap();
         let req = tool.input_schema.required.as_ref().unwrap();
         assert!(req.contains(&"name".to_string()));
         assert!(req.contains(&"email".to_string()));
@@ -475,7 +475,7 @@ mod tests {
     #[test]
     fn log_activity_requires_type() {
         let t = tools();
-        let tool = t.iter().find(|t| t.name == "log-activity").unwrap();
+        let tool = t.iter().find(|t| t.name == "add-activity").unwrap();
         assert_eq!(
             tool.input_schema.required,
             Some(vec!["type".to_string()])
@@ -485,7 +485,7 @@ mod tests {
     #[test]
     fn list_companies_has_no_required_fields() {
         let t = tools();
-        let tool = t.iter().find(|t| t.name == "list-crm-companies").unwrap();
+        let tool = t.iter().find(|t| t.name == "list-companies").unwrap();
         assert!(tool.input_schema.required.is_none());
     }
 

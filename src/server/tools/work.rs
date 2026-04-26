@@ -465,42 +465,6 @@ pub fn tools() -> Vec<Tool> {
                 vec!["project_id".to_string()],
             ),
         },
-        // Triage Contexts
-        Tool {
-            name: "list-triage-contexts".to_string(),
-            description: "List all triage contexts (strategic priorities that influence triage scoring). Returns contexts at 5 levels: company, team, individual, product, customer.".to_string(),
-            input_schema: InputSchema::with_properties(json!({}), vec![]),
-        },
-        Tool {
-            name: "upsert-triage-context".to_string(),
-            description: "Create or update a triage context. Contexts influence task triage scoring: customer (40%), product (25%), team (15%), individual (10%), company (10%).".to_string(),
-            input_schema: InputSchema::with_properties(
-                json!({
-                    "id": { "type": "string", "description": "UUID — omit for new, include for update" },
-                    "level": { "type": "string", "enum": ["company", "team", "individual", "product", "customer"], "description": "Context level" },
-                    "name": { "type": "string", "description": "Display name (e.g. 'Suntec', 'Importers', 'Analyst')" },
-                    "text": { "type": "string", "description": "Free-form context text (used by Claude AI summary)" },
-                    "boost": { "type": "integer", "description": "Score modifier 0-20 (default 10)" },
-                    "suppress": { "type": "boolean", "description": "If true, boost reduces score instead of increasing" },
-                    "match_team_id": { "type": "string", "description": "Team UUID (for team-level context)" },
-                    "match_user_id": { "type": "string", "description": "User UUID (for individual-level context)" },
-                    "match_project_id": { "type": "string", "description": "Project UUID (for product-level context)" },
-                    "match_company_id": { "type": "string", "description": "CRM company UUID (for customer-level context)" },
-                    "active": { "type": "boolean", "description": "Whether this context is active (default true)" }
-                }),
-                vec!["level".to_string(), "name".to_string(), "text".to_string()],
-            ),
-        },
-        Tool {
-            name: "delete-triage-context".to_string(),
-            description: "Delete a triage context by ID".to_string(),
-            input_schema: InputSchema::with_properties(
-                json!({
-                    "id": { "type": "string", "description": "The triage context UUID" }
-                }),
-                vec!["id".to_string()],
-            ),
-        },
     ]
 }
 
@@ -905,30 +869,6 @@ pub async fn call(name: &str, args: Value) -> ToolResult {
             };
             match work::project_update_context(data).await {
                 Ok(context) => ToolResult::json(&context),
-                Err(e) => ToolResult::error(e.to_string()),
-            }
-        }
-
-        // Triage Contexts
-        "list-triage-contexts" => {
-            match work::work_list_triage_contexts().await {
-                Ok(contexts) => ToolResult::json(&contexts),
-                Err(e) => ToolResult::error(e.to_string()),
-            }
-        }
-        "upsert-triage-context" => {
-            match work::work_upsert_triage_context(args).await {
-                Ok(result) => ToolResult::json(&result),
-                Err(e) => ToolResult::error(e.to_string()),
-            }
-        }
-        "delete-triage-context" => {
-            let id = match args.get("id").and_then(|v| v.as_str()) {
-                Some(id) => id.to_string(),
-                None => return ToolResult::error("id is required".to_string()),
-            };
-            match work::work_delete_triage_context(id).await {
-                Ok(()) => ToolResult::text("Triage context deleted.".to_string()),
                 Err(e) => ToolResult::error(e.to_string()),
             }
         }

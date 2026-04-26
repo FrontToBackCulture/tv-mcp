@@ -309,7 +309,7 @@ mod tests {
             jsonrpc: "2.0".to_string(),
             id: Some(json!(42)),
             method: "tools/call".to_string(),
-            params: Some(json!({"name": "list-crm-companies"})),
+            params: Some(json!({"name": "list-companies"})),
         };
         let s = serde_json::to_string(&req).unwrap();
         let parsed: JsonRpcRequest = serde_json::from_str(&s).unwrap();

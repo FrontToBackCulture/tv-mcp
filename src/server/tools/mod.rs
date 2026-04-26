@@ -8,14 +8,15 @@ pub mod generate;
 pub mod intercom;
 pub mod docgen;
 pub mod val_sync;
-pub mod feed;
 pub mod discussions;
 pub mod notifications;
 pub mod blog;
+pub mod docs;
 pub mod whatsapp;
 pub mod apollo;
 pub mod diagnostics;
 pub mod fy_review;
+pub mod mcp_tools;
 pub mod qbo;
 
 use super::protocol::{Tool, ToolResult};
@@ -46,9 +47,6 @@ pub fn list_tools() -> Vec<Tool> {
     // VAL Sync tools
     tools.extend(val_sync::tools());
 
-    // Feed tools
-    tools.extend(feed::tools());
-
     // Discussion tools
     tools.extend(discussions::tools());
 
@@ -57,6 +55,9 @@ pub fn list_tools() -> Vec<Tool> {
 
     // Blog tools
     tools.extend(blog::tools());
+
+    // Docs portal tools (gated /docs section on tv-website)
+    tools.extend(docs::tools());
 
     // WhatsApp summary tools
     tools.extend(whatsapp::tools());
@@ -72,6 +73,9 @@ pub fn list_tools() -> Vec<Tool> {
 
     // FY Review (mgmt workspace) tools
     tools.extend(fy_review::tools());
+
+    // MCP tools registry (self-discovery + metadata)
+    tools.extend(mcp_tools::tools());
 
     tools
 }
@@ -98,19 +102,20 @@ pub async fn call_tool(name: &str, arguments: Value) -> ToolResult {
         return work::call(name, arguments).await;
     }
 
-    // CRM module tools (companies, contacts) + activities (general)
-    if name.starts_with("list-crm-") || name.starts_with("find-crm-") ||
-       name.starts_with("get-crm-") || name.starts_with("create-crm-") ||
-       name.starts_with("update-crm-") || name.starts_with("delete-crm-") ||
-       name == "log-activity" || name == "list-activities" ||
+    // CRM module tools (companies, contacts) + activities (general).
+    if name == "list-companies" || name == "find-company" || name == "get-company" ||
+       name == "create-company" || name == "update-company" || name == "delete-company" ||
+       name == "list-contacts" || name == "find-contact" || name == "create-contact" ||
+       name == "update-contact" ||
+       name == "add-activity" || name == "list-activities" ||
        name == "update-activity" || name == "delete-activity" {
         return crm::call(name, arguments).await;
     }
 
-    // Email campaign + transactional + entity email tools
+    // Email campaign + transactional + linked email tools
     if name.starts_with("list-email-") || name.starts_with("create-email-") ||
        name.starts_with("update-email-") || name.starts_with("delete-email-") ||
-       name == "send-email" || name == "list-entity-emails" {
+       name == "send-email" || name == "list-linked-emails" {
         return email::call(name, arguments).await;
     }
 
@@ -134,11 +139,6 @@ pub async fn call_tool(name: &str, arguments: Value) -> ToolResult {
         return val_sync::call(name, arguments).await;
     }
 
-    // Feed tools
-    if name.ends_with("-feed-card") || name.ends_with("-feed-cards") {
-        return feed::call(name, arguments).await;
-    }
-
     // Discussion tools
     if name.ends_with("-discussion") || name.ends_with("-discussions") {
         return discussions::call(name, arguments).await;
@@ -154,9 +154,14 @@ pub async fn call_tool(name: &str, arguments: Value) -> ToolResult {
         return blog::call(name, arguments).await;
     }
 
+    // Docs portal tools
+    if name.ends_with("-docs-page") || name.ends_with("-docs-pages") {
+        return docs::call(name, arguments).await;
+    }
+
     // WhatsApp summary tools
     if name.ends_with("-whatsapp-summary") || name.ends_with("-whatsapp-summaries") ||
-       name == "whatsapp-latest-date" {
+       name == "get-latest-whatsapp-summary-date" {
         return whatsapp::call(name, arguments).await;
     }
 
@@ -178,6 +183,11 @@ pub async fn call_tool(name: &str, arguments: Value) -> ToolResult {
     // FY Review tools (mgmt workspace)
     if name.starts_with("fy-") {
         return fy_review::call(name, arguments).await;
+    }
+
+    // MCP tools registry
+    if name == "sync-mcp-tools" || name == "list-mcp-tools" {
+        return mcp_tools::call(name, arguments).await;
     }
 
     ToolResult::error(format!("Unknown tool: {}", name))
@@ -267,10 +277,10 @@ mod tests {
     fn crm_tools_registered() {
         let names = tool_names();
         let expected = [
-            "list-crm-companies", "find-crm-company", "get-crm-company",
-            "create-crm-company", "update-crm-company", "delete-crm-company",
-            "list-crm-contacts", "find-crm-contact", "create-crm-contact",
-            "update-crm-contact", "log-activity", "list-activities",
+            "list-companies", "find-company", "get-company",
+            "create-company", "update-company", "delete-company",
+            "list-contacts", "find-contact", "create-contact",
+            "update-contact", "add-activity", "list-activities",
             "update-activity", "delete-activity",
         ];
         for name in expected {

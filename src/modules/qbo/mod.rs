@@ -7,6 +7,7 @@
 
 pub mod connection;
 pub mod entities;
+pub mod je_write;
 pub mod reports;
 pub mod sync;
 pub mod transactions;

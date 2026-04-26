@@ -1,7 +1,7 @@
 // QBO MCP Tools — read-only (+ sync triggers) for the mgmt workspace.
 
 use crate::core::error::CmdResult;
-use crate::modules::qbo::{connection, entities, reports, sync, transactions};
+use crate::modules::qbo::{connection, entities, je_write, reports, sync, transactions};
 use crate::server::protocol::{InputSchema, Tool, ToolResult};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -203,6 +203,105 @@ pub fn tools() -> Vec<Tool> {
             ),
         },
 
+        // ───── JE write ops (create / update / delete / accrual) ─────
+        Tool {
+            name: "qbo-create-journal-entry".to_string(),
+            description: "Create one or more balanced journal entries in QBO. Each entry = one DR leg + one CR leg at the same amount. An entity (Customer/Vendor/Employee qbo_id) is required and links both legs for audit. Created JEs are mirrored into qbo_journal_entries immediately. Max 50 entries per call.".to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "entries": {
+                        "type": "array",
+                        "description": "Array of proposed entries",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "doc_number": { "type": "string", "description": "JE DocNumber (≤21 chars)" },
+                                "txn_date": { "type": "string", "description": "YYYY-MM-DD" },
+                                "description": { "type": "string", "description": "Narrative copied to PrivateNote + both line Descriptions" },
+                                "amount": { "type": "number", "description": "Dollar amount (same for DR and CR leg)" },
+                                "dr_account_qbo_id": { "type": "string" },
+                                "cr_account_qbo_id": { "type": "string" },
+                                "customer_qbo_id": { "type": "string", "description": "Entity qbo_id (QBO resolves Vendor/Employee/Customer by ID)" },
+                                "currency": { "type": "string", "description": "Optional; defaults to home currency" }
+                            },
+                            "required": ["doc_number", "txn_date", "description", "amount", "dr_account_qbo_id", "cr_account_qbo_id", "customer_qbo_id"]
+                        }
+                    }
+                }),
+                vec!["entries".to_string()],
+            ),
+        },
+        Tool {
+            name: "qbo-update-je-amount".to_string(),
+            description: "Change the amount on an existing QBO JournalEntry. Both the DR and CR legs are rewritten to the new amount so the JE stays balanced. Everything else (DocNumber, TxnDate, AccountRefs, Entity, Description) is preserved.".to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "qbo_id": { "type": "string", "description": "QBO JournalEntry ID" },
+                    "amount": { "type": "number", "description": "New dollar amount (≤ 2 decimal places)" }
+                }),
+                vec!["qbo_id".to_string(), "amount".to_string()],
+            ),
+        },
+        Tool {
+            name: "qbo-update-je-docnumber".to_string(),
+            description: "Rewrite the DocNumber on an existing QBO JournalEntry (≤21 chars). Everything else is preserved.".to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "qbo_id": { "type": "string" },
+                    "doc_number": { "type": "string", "description": "New DocNumber (≤21 chars)" }
+                }),
+                vec!["qbo_id".to_string(), "doc_number".to_string()],
+            ),
+        },
+        Tool {
+            name: "qbo-update-je-txndate".to_string(),
+            description: "Rewrite the TxnDate on an existing QBO JournalEntry. Shifts the JE into a different accounting period without delete+recreate.".to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "qbo_id": { "type": "string" },
+                    "txn_date": { "type": "string", "description": "YYYY-MM-DD" }
+                }),
+                vec!["qbo_id".to_string(), "txn_date".to_string()],
+            ),
+        },
+        Tool {
+            name: "qbo-delete-journal-entry".to_string(),
+            description: "Soft-delete a QBO JournalEntry (QBO marks status=Deleted and hides it from standard queries). Also removes the row from qbo_journal_entries so the UI drops it immediately.".to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "qbo_id": { "type": "string", "description": "QBO JournalEntry ID" }
+                }),
+                vec!["qbo_id".to_string()],
+            ),
+        },
+        Tool {
+            name: "qbo-post-accrual".to_string(),
+            description: "Post a matched accrual + reversal JE pair. Shifts an expense from one month to the prior month — accrual dated the prior month-end (Dr expense / Cr liability), reversal dated the clicked month-start (Dr liability / Cr expense). Use for payroll/CPF lag cleanup. Net effect: prior-month expense increases, clicked-month expense decreases, liability nets to zero.".to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "description": { "type": "string", "description": "Human-readable narrative (copied to PrivateNote + line Descriptions)" },
+                    "amount": { "type": "number", "description": "Dollar amount to shift" },
+                    "currency": { "type": "string", "description": "Optional; defaults to home currency" },
+                    "expense_account_qbo_id": { "type": "string" },
+                    "liability_account_qbo_id": { "type": "string", "description": "e.g. CPF Payable qbo_id" },
+                    "entity_qbo_id": { "type": "string", "description": "Optional vendor/employee link" },
+                    "entity_type": { "type": "string", "enum": ["Vendor", "Customer", "Employee"], "description": "Required if entity_qbo_id is set" },
+                    "accrual_date": { "type": "string", "description": "YYYY-MM-DD — last day of prior month" },
+                    "reversal_date": { "type": "string", "description": "YYYY-MM-DD — first day of clicked month" },
+                    "doc_prefix": { "type": "string", "description": "Up to ~10 chars, e.g. 'AC-202412'. Suffix is auto-generated." }
+                }),
+                vec![
+                    "description".to_string(),
+                    "amount".to_string(),
+                    "expense_account_qbo_id".to_string(),
+                    "liability_account_qbo_id".to_string(),
+                    "accrual_date".to_string(),
+                    "reversal_date".to_string(),
+                    "doc_prefix".to_string(),
+                ],
+            ),
+        },
+
         // ───── Reports ─────
         Tool {
             name: "qbo-get-pl".to_string(),
@@ -263,6 +362,10 @@ fn opt_i32(v: &Value, key: &str) -> Option<i32> {
 fn req_str(v: &Value, key: &str) -> Result<String, String> {
     v.get(key).and_then(|x| x.as_str()).map(|s| s.to_string())
         .ok_or_else(|| format!("Missing required argument: {}", key))
+}
+fn req_f64(v: &Value, key: &str) -> Result<f64, String> {
+    v.get(key).and_then(|x| x.as_f64())
+        .ok_or_else(|| format!("Missing required numeric argument: {}", key))
 }
 
 pub async fn call(name: &str, args: Value) -> ToolResult {
@@ -388,6 +491,68 @@ pub async fn call(name: &str, args: Value) -> ToolResult {
             )
             .await,
         ),
+
+        "qbo-create-journal-entry" => {
+            let entries_val = match args.get("entries") {
+                Some(v) => v.clone(),
+                None => return ToolResult::error("Missing required argument: entries".into()),
+            };
+            let entries: Vec<je_write::ProposedEntry> = match serde_json::from_value(entries_val) {
+                Ok(v) => v,
+                Err(e) => return ToolResult::error(format!("Invalid entries: {}", e)),
+            };
+            if entries.is_empty() {
+                return ToolResult::error("entries must be a non-empty array".into());
+            }
+            result_to_tool(je_write::qbo_create_journal_entry(entries).await)
+        }
+        "qbo-update-je-amount" => {
+            let qbo_id = match req_str(&args, "qbo_id") {
+                Ok(v) => v,
+                Err(e) => return ToolResult::error(e),
+            };
+            let amount = match req_f64(&args, "amount") {
+                Ok(v) => v,
+                Err(e) => return ToolResult::error(e),
+            };
+            result_to_tool(je_write::qbo_update_je_amount(&qbo_id, amount).await)
+        }
+        "qbo-update-je-docnumber" => {
+            let qbo_id = match req_str(&args, "qbo_id") {
+                Ok(v) => v,
+                Err(e) => return ToolResult::error(e),
+            };
+            let doc = match req_str(&args, "doc_number") {
+                Ok(v) => v,
+                Err(e) => return ToolResult::error(e),
+            };
+            result_to_tool(je_write::qbo_update_je_docnumber(&qbo_id, &doc).await)
+        }
+        "qbo-update-je-txndate" => {
+            let qbo_id = match req_str(&args, "qbo_id") {
+                Ok(v) => v,
+                Err(e) => return ToolResult::error(e),
+            };
+            let date = match req_str(&args, "txn_date") {
+                Ok(v) => v,
+                Err(e) => return ToolResult::error(e),
+            };
+            result_to_tool(je_write::qbo_update_je_txndate(&qbo_id, &date).await)
+        }
+        "qbo-delete-journal-entry" => {
+            let qbo_id = match req_str(&args, "qbo_id") {
+                Ok(v) => v,
+                Err(e) => return ToolResult::error(e),
+            };
+            result_to_tool(je_write::qbo_delete_journal_entry(&qbo_id).await)
+        }
+        "qbo-post-accrual" => {
+            let input: je_write::AccrualInput = match serde_json::from_value(args.clone()) {
+                Ok(v) => v,
+                Err(e) => return ToolResult::error(format!("Invalid input: {}", e)),
+            };
+            result_to_tool(je_write::qbo_post_accrual(input).await)
+        }
 
         "qbo-get-pl" => {
             let period = match req_str(&args, "period") {

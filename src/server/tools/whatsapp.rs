@@ -34,7 +34,7 @@ pub fn tools() -> Vec<Tool> {
             ),
         },
         Tool {
-            name: "whatsapp-latest-date".to_string(),
+            name: "get-latest-whatsapp-summary-date".to_string(),
             description: "Get the most recent summary date for an initiative. Use this to determine what's already been processed before summarizing new messages.".to_string(),
             input_schema: InputSchema::with_properties(
                 json!({
@@ -128,7 +128,7 @@ pub async fn call(name: &str, arguments: Value) -> ToolResult {
                 Err(e) => ToolResult::error(format!("Failed to list WhatsApp summaries: {}", e)),
             }
         }
-        "whatsapp-latest-date" => {
+        "get-latest-whatsapp-summary-date" => {
             let initiative_id = arguments["initiative_id"].as_str().unwrap_or("").to_string();
 
             match whatsapp::whatsapp_latest_date(initiative_id).await {

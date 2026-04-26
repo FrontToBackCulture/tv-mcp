@@ -13,7 +13,7 @@ pub fn tools() -> Vec<Tool> {
     vec![
         // Entity email links (linked correspondence/campaigns on projects, tasks, companies, contacts)
         Tool {
-            name: "list-entity-emails".to_string(),
+            name: "list-linked-emails".to_string(),
             description: "List emails linked to a project, task, company, or contact. Returns email metadata (subject, from, date) from the email cache. Use this to see what correspondence is associated with an entity.".to_string(),
             input_schema: InputSchema::with_properties(
                 json!({
@@ -151,7 +151,7 @@ pub fn tools() -> Vec<Tool> {
 /// Handle email tool calls
 pub async fn call(name: &str, args: Value) -> ToolResult {
     match name {
-        "list-entity-emails" => {
+        "list-linked-emails" => {
             let entity_type = match args.get("entity_type").and_then(|v| v.as_str()) {
                 Some(v) => v,
                 None => return ToolResult::error("entity_type is required".to_string()),
