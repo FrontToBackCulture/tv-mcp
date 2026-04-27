@@ -28,12 +28,17 @@ try {
     exit 1
   }
 
-  # Build Windows binary
+  # Build Windows binary (always cross-compile to x86_64 so the artifact arch
+  # matches the asset name regardless of host arch — important on Parallels
+  # Windows running on Apple Silicon, which is ARM64 by default).
+  Write-Host "Ensuring x86_64-pc-windows-msvc target is installed..."
+  rustup target add x86_64-pc-windows-msvc | Out-Null
+
   Write-Host "Building Windows (x86_64) binary..."
-  cargo build --release
+  cargo build --release --target x86_64-pc-windows-msvc
 
   $artifact = "tv-mcp-x86_64-pc-windows-msvc.exe"
-  Copy-Item "target\release\tv-mcp.exe" $artifact -Force
+  Copy-Item "target\x86_64-pc-windows-msvc\release\tv-mcp.exe" $artifact -Force
 
   # Upload
   Write-Host "Uploading $artifact to release $Version..."
