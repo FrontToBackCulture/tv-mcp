@@ -1,6 +1,6 @@
 [package]
 name = "tv-mcp"
-version = "0.10.32"
+version = "0.10.33"
 edition = "2021"
 description = "MCP server for ThinkVAL — CRM, Work, Email, VAL Sync, and more"
 

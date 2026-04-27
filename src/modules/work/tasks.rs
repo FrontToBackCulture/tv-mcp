@@ -75,6 +75,9 @@ pub async fn work_create_task(data: CreateTask) -> CmdResult<Task> {
 
     let next_number = project.next_task_number.unwrap_or(1);
 
+    // Inherit project's company_id if task didn't specify one
+    let company_id = data.company_id.clone().or_else(|| project.company_id.clone());
+
     // Leave description_json null — tv-client's TaskDetailPanel falls back to
     // ReactMarkdown on the plain description column when description_json is null,
     // which handles markdown (bold, links, lists, etc.) correctly. The previous
@@ -92,7 +95,7 @@ pub async fn work_create_task(data: CreateTask) -> CmdResult<Task> {
         "depends_on": data.depends_on,
         "session_ref": data.session_ref,
         "requires_review": data.requires_review,
-        "company_id": data.company_id,
+        "company_id": company_id,
         "contact_id": data.contact_id,
         "task_type": data.task_type,
         "task_type_changed_at": if data.task_type.is_some() { Some(chrono::Utc::now().to_rfc3339()) } else { None },
