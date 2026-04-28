@@ -33,22 +33,29 @@ src/
 │       ├── email.rs         # Campaigns, groups, send, drafts
 │       ├── generate.rs      # Gamma presentations, Nanobanana images
 │       ├── val_sync.rs      # VAL domain sync operations
-│       ├── feed.rs          # Feed cards
 │       ├── blog.rs          # Blog articles
+│       ├── docs.rs          # tv-knowledge / docs lookups
 │       ├── discussions.rs   # Comments on entities
 │       ├── notifications.rs # Mention notifications
 │       ├── intercom.rs      # Help center publishing
 │       ├── docgen.rs        # PDF generation (proposals, order forms)
 │       ├── apollo.rs        # Apollo prospect search
-│       └── whatsapp.rs      # WhatsApp summaries
+│       ├── whatsapp.rs      # WhatsApp summaries
+│       ├── fy_review.rs     # FY review (snapshots, drift alerts, recognition, reconciliation)
+│       ├── qbo.rs           # QuickBooks Online (reports, JE writes, lists)
+│       ├── mcp_tools.rs     # MCP tool catalog browsing
+│       └── diagnostics.rs   # Self-diagnostics (settings, auth, env)
 └── modules/                # Business logic (separated from server layer)
     ├── apollo/              # Apollo API integration
     ├── blog/                # Blog CRUD
     ├── crm/                 # Companies, contacts, activities
     ├── discussions/         # Entity comments
+    ├── docs/                # Knowledge base / docs lookups
     ├── email/               # Campaigns + transactional (AWS SES)
-    ├── feed/                # Feed cards
+    ├── fy_review/           # FY review (QBO-backed finance ops)
+    ├── mcp_tools/           # MCP tool catalog
     ├── notifications/       # Mentions
+    ├── qbo/                 # QuickBooks Online client
     ├── tools/               # Gamma API, Nanobanana (Gemini), Intercom, DocGen
     ├── val_sync/            # VAL domain sync (databases, workflows, dashboards, queries, fields, monitoring)
     ├── whatsapp/            # Chat summaries
