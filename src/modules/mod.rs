@@ -12,3 +12,4 @@ pub mod tools;
 pub mod val_sync;
 pub mod whatsapp;
 pub mod work;
+pub mod workflows;

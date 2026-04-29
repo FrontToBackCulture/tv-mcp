@@ -204,3 +204,83 @@ pub async fn val_api_fetch(
         .await
         .map_err(|e| ValApiError::Parse(e.to_string()))
 }
+
+/// Generic VAL API request for non-GET (or arbitrary path) calls.
+///
+/// Authenticates via `?uuid=1&token=<jwt>` like `val_api_fetch`. Use this for
+/// write operations (POST/PUT/PATCH) and execution endpoints where the path
+/// isn't covered by the artifact_type routing in `val_api_fetch`.
+///
+/// - `method`: "GET" | "POST" | "PUT" | "PATCH"
+/// - `path`: full path including leading slash, e.g. "/api/v1/workflow/" or
+///   "/api/v1/workflow/33563/rerun"
+/// - `query`: extra query params merged on top of auth params
+/// - `body`: optional JSON body for POST/PUT/PATCH
+pub async fn val_api_request(
+    base_url: &str,
+    token: &str,
+    method: &str,
+    path: &str,
+    query: &[(&str, &str)],
+    body: Option<Value>,
+) -> Result<Value, ValApiError> {
+    let client = crate::HTTP_CLIENT.clone();
+    let url = format!("{}{}", base_url, path);
+
+    let mut request = match method.to_uppercase().as_str() {
+        "GET" => client.get(&url),
+        "POST" => client.post(&url),
+        "PUT" => client.put(&url),
+        "PATCH" => client.patch(&url),
+        other => {
+            return Err(ValApiError::Parse(format!(
+                "Unsupported HTTP method: {}",
+                other
+            )));
+        }
+    };
+
+    request = request.query(&[("uuid", "1"), ("token", token)]);
+    for (k, v) in query {
+        request = request.query(&[(k, v)]);
+    }
+
+    if let Some(body_val) = body {
+        request = request
+            .header("Content-Type", "application/json")
+            .json(&body_val);
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|e| ValApiError::Network(e.to_string()))?;
+
+    let status = response.status().as_u16();
+    if status == 401 || status == 403 {
+        return Err(ValApiError::AuthExpired);
+    }
+
+    if !response.status().is_success() {
+        let body = response.text().await.unwrap_or_default();
+        let lower = body.to_lowercase();
+        if lower.contains("token not authentic")
+            || lower.contains("jwt expired")
+            || lower.contains("invalid signature")
+        {
+            return Err(ValApiError::AuthExpired);
+        }
+        return Err(ValApiError::Http { status, body });
+    }
+
+    let text = response
+        .text()
+        .await
+        .map_err(|e| ValApiError::Network(e.to_string()))?;
+
+    if text.trim().is_empty() {
+        return Ok(Value::Null);
+    }
+
+    serde_json::from_str(&text).map_err(|e| ValApiError::Parse(e.to_string()))
+}

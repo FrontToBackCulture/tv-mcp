@@ -8,6 +8,7 @@ pub mod generate;
 pub mod intercom;
 pub mod docgen;
 pub mod val_sync;
+pub mod workflows;
 pub mod discussions;
 pub mod notifications;
 pub mod blog;
@@ -46,6 +47,9 @@ pub fn list_tools() -> Vec<Tool> {
 
     // VAL Sync tools
     tools.extend(val_sync::tools());
+
+    // Workflow authoring tools (create / update / execute / plugin discovery)
+    tools.extend(workflows::tools());
 
     // Discussion tools
     tools.extend(discussions::tools());
@@ -137,6 +141,12 @@ pub async fn call_tool(name: &str, arguments: Value) -> ToolResult {
     // VAL Sync tools
     if name.starts_with("sync-val-") || name.starts_with("sync-all-domain-") || name == "execute-val-sql" || name == "execute-supabase-sql" || name == "list-drive-files" || name == "check-all-domain-drive-files" {
         return val_sync::call(name, arguments).await;
+    }
+
+    // Workflow authoring tools
+    if name == "create-workflow" || name == "update-workflow" || name == "execute-workflow"
+        || name == "list-workflow-plugins" || name == "get-workflow-plugin-schema" {
+        return workflows::call(name, arguments).await;
     }
 
     // Discussion tools
