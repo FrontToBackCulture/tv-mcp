@@ -15,6 +15,19 @@ async fn main() {
         return;
     }
 
+    if args.iter().any(|a| a == "--sync-tools") {
+        match tv_mcp::modules::mcp_tools::sync_mcp_tools().await {
+            Ok(r) => {
+                println!("{}", serde_json::to_string(&r).unwrap_or_else(|_| "{}".to_string()));
+            }
+            Err(e) => {
+                eprintln!("sync-mcp-tools failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
     eprintln!("[tv-mcp] v{} starting", VERSION);
 
     if args.iter().any(|a| a == "--http") {

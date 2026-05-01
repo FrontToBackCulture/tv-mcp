@@ -7,6 +7,7 @@ pub mod email;
 pub mod generate;
 pub mod intercom;
 pub mod docgen;
+pub mod val_admin;
 pub mod val_sync;
 pub mod workflows;
 pub mod discussions;
@@ -50,6 +51,9 @@ pub fn list_tools() -> Vec<Tool> {
 
     // Workflow authoring tools (create / update / execute / plugin discovery)
     tools.extend(workflows::tools());
+
+    // VAL admin authoring tools (spaces / zones / tables)
+    tools.extend(val_admin::tools());
 
     // Discussion tools
     tools.extend(discussions::tools());
@@ -147,6 +151,17 @@ pub async fn call_tool(name: &str, arguments: Value) -> ToolResult {
     if name == "create-workflow" || name == "update-workflow" || name == "execute-workflow"
         || name == "list-workflow-plugins" || name == "get-workflow-plugin-schema" {
         return workflows::call(name, arguments).await;
+    }
+
+    // VAL admin authoring tools (spaces, zones, tables, fields, queries)
+    if name == "create-val-space" || name == "update-val-space"
+        || name == "create-val-zone" || name == "update-val-zone"
+        || name == "create-val-table" || name == "clone-val-table"
+        || name == "add-val-table-field" || name == "add-val-table-fields"
+        || name == "update-val-field" || name == "assign-val-table-to-zone"
+        || name == "create-val-query" || name == "update-val-query"
+        || name == "copy-val-query" {
+        return val_admin::call(name, arguments).await;
     }
 
     // Discussion tools

@@ -9,6 +9,7 @@ pub mod mcp_tools;
 pub mod notifications;
 pub mod qbo;
 pub mod tools;
+pub mod val_admin;
 pub mod val_sync;
 pub mod whatsapp;
 pub mod work;
