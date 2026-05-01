@@ -52,6 +52,35 @@ async fn post_json(domain: &str, op: &str, path: &str, body: Value) -> CmdResult
     .await
 }
 
+async fn get_json(domain: &str, op: &str, path: &str) -> CmdResult<Value> {
+    let path = path.to_string();
+    with_auth_retry(domain, op, |base_url, token| {
+        let path = path.clone();
+        async move {
+            val_api_request(&base_url, &token, "GET", &path, &[], None).await
+        }
+    })
+    .await
+}
+
+async fn get_json_with_query(
+    domain: &str,
+    op: &str,
+    path: &str,
+    query: Vec<(String, String)>,
+) -> CmdResult<Value> {
+    let path = path.to_string();
+    with_auth_retry(domain, op, |base_url, token| {
+        let path = path.clone();
+        let query = query.clone();
+        async move {
+            let q: Vec<(&str, &str)> = query.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+            val_api_request(&base_url, &token, "GET", &path, &q, None).await
+        }
+    })
+    .await
+}
+
 // ============================================================================
 // Spaces (UI: "Project")
 // ============================================================================
@@ -79,6 +108,58 @@ pub async fn update_space(domain: &str, space_id: &str, updates: Value) -> CmdRe
     }
     let body = json!({ "project": project });
     post_json(domain, "update-val-space", "/db/admin-projects/updateProject", body).await
+}
+
+pub async fn list_spaces(domain: &str) -> CmdResult<Value> {
+    get_json(domain, "list-val-spaces", "/db/admin-projects/getProjects").await
+}
+
+pub async fn get_space(domain: &str, space_id: &str) -> CmdResult<Value> {
+    if space_id.trim().is_empty() {
+        return Err(CommandError::Config("'space_id' cannot be empty".to_string()));
+    }
+    let path = format!("/api/v1/spaces/{}/info", space_id);
+    get_json(domain, "get-val-space", &path).await
+}
+
+pub async fn list_space_zones(domain: &str, space_id: &str) -> CmdResult<Value> {
+    if space_id.trim().is_empty() {
+        return Err(CommandError::Config("'space_id' cannot be empty".to_string()));
+    }
+    let path = format!("/db/admin-projects/getProjectDetails/{}", space_id);
+    get_json(domain, "list-val-space-zones", &path).await
+}
+
+pub async fn list_zones(domain: &str, filters: Option<Value>) -> CmdResult<Value> {
+    let mut query: Vec<(String, String)> = Vec::new();
+    if let Some(Value::Object(map)) = filters {
+        for (k, v) in map.into_iter() {
+            let s = match v {
+                Value::String(s) => s,
+                Value::Number(n) => n.to_string(),
+                Value::Bool(b) => b.to_string(),
+                _ => continue,
+            };
+            query.push((k, s));
+        }
+    }
+    get_json_with_query(domain, "list-val-zones", "/api/v1/admin/zones", query).await
+}
+
+pub async fn get_zone(domain: &str, zone_id: &str) -> CmdResult<Value> {
+    if zone_id.trim().is_empty() {
+        return Err(CommandError::Config("'zone_id' cannot be empty".to_string()));
+    }
+    let path = format!("/db/zones/{}/info", zone_id);
+    get_json(domain, "get-val-zone", &path).await
+}
+
+pub async fn list_zone_tables(domain: &str, zone_id: &str) -> CmdResult<Value> {
+    if zone_id.trim().is_empty() {
+        return Err(CommandError::Config("'zone_id' cannot be empty".to_string()));
+    }
+    let path = format!("/db/admin-phase/getPhaseDetails/{}", zone_id);
+    get_json(domain, "list-val-zone-tables", &path).await
 }
 
 // ============================================================================
@@ -164,6 +245,116 @@ pub async fn create_table(
     }
     let body = json!({ "repoTable": repo_table });
     post_json(domain, "create-val-table", "/db/admin-repoTable/addRepoTable", body).await
+}
+
+pub async fn update_table(domain: &str, table_id: &str, updates: Value) -> CmdResult<Value> {
+    if !updates.is_object() {
+        return Err(CommandError::Config("'updates' must be an object".to_string()));
+    }
+    let mut repo_table = updates;
+    if let Some(obj) = repo_table.as_object_mut() {
+        // val-services keys the update by `value` (the table id / custom_tbl identifier)
+        // and also accepts `table_name` as the canonical name field.
+        obj.insert("value".to_string(), Value::String(table_id.to_string()));
+    }
+    let body = json!({ "repoTable": repo_table });
+    post_json(domain, "update-val-table", "/db/admin-repoTable/updateRepoTable", body).await
+}
+
+pub async fn get_table(domain: &str, table_id: &str) -> CmdResult<Value> {
+    if table_id.trim().is_empty() {
+        return Err(CommandError::Config("'table_id' cannot be empty".to_string()));
+    }
+    let path = format!("/db/admin-repoType/getRepoTableDetails/{}", table_id);
+    get_json(domain, "get-val-table", &path).await
+}
+
+pub async fn list_tables(domain: &str, filters: Option<Value>) -> CmdResult<Value> {
+    let mut query: Vec<(String, String)> = Vec::new();
+    if let Some(Value::Object(map)) = filters {
+        for (k, v) in map.into_iter() {
+            let s = match v {
+                Value::String(s) => s,
+                Value::Number(n) => n.to_string(),
+                Value::Bool(b) => b.to_string(),
+                _ => continue,
+            };
+            query.push((k, s));
+        }
+    }
+    get_json_with_query(domain, "list-val-tables", "/api/v1/admin/tables", query).await
+}
+
+pub async fn list_table_dependencies(domain: &str, table_id: &str) -> CmdResult<Value> {
+    if table_id.trim().is_empty() {
+        return Err(CommandError::Config("'table_id' cannot be empty".to_string()));
+    }
+    let path = format!("/db/dependencies/{}", table_id);
+    get_json(domain, "list-val-table-dependencies", &path).await
+}
+
+pub async fn remove_table_field(
+    domain: &str,
+    table_id: &str,
+    zone_id: &str,
+    field: Value,
+) -> CmdResult<Value> {
+    if table_id.trim().is_empty() {
+        return Err(CommandError::Config("'table_id' cannot be empty".to_string()));
+    }
+    if !field.is_object() {
+        return Err(CommandError::Config(
+            "'field' must be an object identifying the field (e.g. { id, column_name })".to_string(),
+        ));
+    }
+    let mut field_payload = field;
+    if let Some(obj) = field_payload.as_object_mut() {
+        // val-services keys the table on `field.value`
+        obj.insert("value".to_string(), Value::String(table_id.to_string()));
+    }
+    let body = json!({ "field": field_payload, "zone": zone_id });
+    post_json(
+        domain,
+        "remove-val-table-field",
+        "/db/admin-repoTable/deleteTableFields",
+        body,
+    )
+    .await
+}
+
+pub async fn list_fields(domain: &str, convert: Option<bool>) -> CmdResult<Value> {
+    let mut query: Vec<(String, String)> = Vec::new();
+    if let Some(c) = convert {
+        query.push(("convert".to_string(), c.to_string()));
+    }
+    get_json_with_query(domain, "list-val-fields", "/db/admin-fields/getAllFields/", query).await
+}
+
+pub async fn find_tables_with_field(domain: &str, filters: Value) -> CmdResult<Value> {
+    let mut query: Vec<(String, String)> = Vec::new();
+    if let Value::Object(map) = filters {
+        for (k, v) in map.into_iter() {
+            let s = match v {
+                Value::String(s) => s,
+                Value::Number(n) => n.to_string(),
+                Value::Bool(b) => b.to_string(),
+                _ => continue,
+            };
+            query.push((k, s));
+        }
+    }
+    if query.is_empty() {
+        return Err(CommandError::Config(
+            "'filters' must include at least one identifier (e.g. { name } or { id })".to_string(),
+        ));
+    }
+    get_json_with_query(
+        domain,
+        "find-val-tables-with-field",
+        "/db/admin-fields/returnTablesWithField",
+        query,
+    )
+    .await
 }
 
 // ============================================================================
@@ -285,6 +476,71 @@ pub async fn assign_table_to_zone(
 /// `datasource` is the nested query config (`{ basicInfo, queryInfo: { tableInfo, fields, filters, joins, ... } }`).
 /// Cloning the shape of a synced query in `tv-knowledge/.../queries/<id>/definition.json`
 /// is the easiest starting point.
+pub async fn list_queries(domain: &str, filters: Option<Value>) -> CmdResult<Value> {
+    let mut query: Vec<(String, String)> = Vec::new();
+    if let Some(Value::Object(map)) = filters {
+        for (k, v) in map.into_iter() {
+            let s = match v {
+                Value::String(s) => s,
+                Value::Number(n) => n.to_string(),
+                Value::Bool(b) => b.to_string(),
+                _ => continue,
+            };
+            query.push((k, s));
+        }
+    }
+    get_json_with_query(domain, "list-val-queries", "/db/data/v1/listAllDSQueries", query).await
+}
+
+pub async fn get_query(domain: &str, dsid: &str) -> CmdResult<Value> {
+    if dsid.trim().is_empty() {
+        return Err(CommandError::Config("'dsid' cannot be empty".to_string()));
+    }
+    let path = format!("/db/data/v1/getDSQuery/{}", dsid);
+    get_json(domain, "get-val-query", &path).await
+}
+
+pub async fn execute_query(
+    domain: &str,
+    dsid: &str,
+    use_cache: Option<bool>,
+    limit: Option<u64>,
+    paginate: Option<Value>,
+) -> CmdResult<Value> {
+    if dsid.trim().is_empty() {
+        return Err(CommandError::Config("'dsid' cannot be empty".to_string()));
+    }
+    let mut query: Vec<(String, String)> = Vec::new();
+    if let Some(c) = use_cache {
+        query.push(("useCache".to_string(), c.to_string()));
+    }
+    if let Some(l) = limit {
+        query.push(("limit".to_string(), l.to_string()));
+    }
+    if let Some(Value::Object(map)) = paginate {
+        for (k, v) in map.into_iter() {
+            let s = match v {
+                Value::String(s) => s,
+                Value::Number(n) => n.to_string(),
+                Value::Bool(b) => b.to_string(),
+                _ => continue,
+            };
+            query.push((k, s));
+        }
+    }
+    let path = format!("/db/data/v1/executeDSQuery/{}", dsid);
+    get_json_with_query(domain, "execute-val-query", &path, query).await
+}
+
+pub async fn test_query(domain: &str, payload: Value) -> CmdResult<Value> {
+    if !payload.is_object() {
+        return Err(CommandError::Config(
+            "'payload' must be an object — same shape as a `datasource` (basicInfo + queryInfo).".to_string(),
+        ));
+    }
+    post_json(domain, "test-val-query", "/db/data/v1/testDSQuery", payload).await
+}
+
 pub async fn create_query(
     domain: &str,
     name: &str,

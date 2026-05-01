@@ -1,8 +1,6 @@
-// Workflow Authoring MCP Tools
-// 5 tools: create-workflow, update-workflow, execute-workflow,
-//          list-workflow-plugins, get-workflow-plugin-schema
-//
-// No delete-workflow by design — see bot-builder/CLAUDE.md.
+// VAL Workflow MCP Tools
+// 11 tools (read, run, write, plugin discovery).
+// No delete-val-workflow by design — see bot-builder/CLAUDE.md.
 
 use crate::modules::workflows;
 use crate::server::protocol::{InputSchema, Tool, ToolResult};
@@ -22,7 +20,7 @@ macro_rules! require_str {
 pub fn tools() -> Vec<Tool> {
     vec![
         Tool {
-            name: "create-workflow".to_string(),
+            name: "create-val-workflow".to_string(),
             description:
                 "Create a new VAL workflow (job_master row) on a domain. \
                  `data.workflow.plugins[]` must contain at least one plugin step (e.g. SQLWorkflowV2Plugin). \
@@ -57,7 +55,7 @@ pub fn tools() -> Vec<Tool> {
             ),
         },
         Tool {
-            name: "update-workflow".to_string(),
+            name: "update-val-workflow".to_string(),
             description:
                 "Update an existing workflow. \
                  `mode='meta'` (default, PATCH) only supports `name`, `description`, `cron_expression`, `tags` — safe for routine edits. \
@@ -88,7 +86,7 @@ pub fn tools() -> Vec<Tool> {
             ),
         },
         Tool {
-            name: "execute-workflow".to_string(),
+            name: "execute-val-workflow".to_string(),
             description:
                 "Execute a workflow now. \
                  Without `overrides` → reruns the saved definition (POST /:id/rerun). \
@@ -114,10 +112,10 @@ pub fn tools() -> Vec<Tool> {
             ),
         },
         Tool {
-            name: "list-workflow-plugins".to_string(),
+            name: "list-val-workflow-plugins".to_string(),
             description:
                 "List the plugin classes available on a VAL domain (e.g. SQLWorkflowV2Plugin, ReportGeneratorPlugin). \
-                 Use before `create-workflow` to discover what plugins exist."
+                 Use before `create-val-workflow` to discover what plugins exist."
                     .to_string(),
             input_schema: InputSchema::with_properties(
                 json!({
@@ -130,10 +128,111 @@ pub fn tools() -> Vec<Tool> {
             ),
         },
         Tool {
-            name: "get-workflow-plugin-schema".to_string(),
+            name: "list-val-workflows".to_string(),
+            description:
+                "List every VAL workflow (job_master row) in a domain. Returns id, name, cron \
+                 expression, status, and summary metadata. Pass `filters` for query-string \
+                 narrowing — passed through to the workflow-service. Use to discover workflow IDs \
+                 before `get-val-workflow`, `update-val-workflow`, or `execute-val-workflow`."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "filters": {
+                        "type": "object",
+                        "description": "Optional flat key→string|number|bool map merged into the query string."
+                    }
+                }),
+                vec!["domain".to_string()],
+            ),
+        },
+        Tool {
+            name: "get-val-workflow".to_string(),
+            description:
+                "Fetch one VAL workflow's full IJobDefinition (data.workflow.plugins, queue, \
+                 cron, repeat config, audit fields). The proper read path before \
+                 `update-val-workflow` mode='full' — needed to merge changes into the complete \
+                 definition."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "id": {
+                        "type": "string",
+                        "description": "Workflow job_master id (e.g., '33563')"
+                    }
+                }),
+                vec!["domain".to_string(), "id".to_string()],
+            ),
+        },
+        Tool {
+            name: "pause-val-workflow".to_string(),
+            description:
+                "Pause a recurring VAL workflow — stops it firing on its cron schedule without \
+                 changing the schedule. Use to disable a misbehaving workflow during \
+                 investigation. Pair with `resume-val-workflow` to re-enable. For permanent \
+                 disablement, set `cron_expression: null` via `update-val-workflow` mode='meta'."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "id": { "type": "string", "description": "Workflow job_master id" }
+                }),
+                vec!["domain".to_string(), "id".to_string()],
+            ),
+        },
+        Tool {
+            name: "resume-val-workflow".to_string(),
+            description:
+                "Resume a paused VAL workflow — re-enables firing on its existing cron schedule. \
+                 No-op if the workflow wasn't paused."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "id": { "type": "string", "description": "Workflow job_master id" }
+                }),
+                vec!["domain".to_string(), "id".to_string()],
+            ),
+        },
+        Tool {
+            name: "list-val-workflow-executions".to_string(),
+            description:
+                "List recent workflow execution records (live, not the offline \
+                 `sync-all-domain-monitoring` snapshot). Pass `filters` to narrow by job_master \
+                 id, status, time range, etc. — passed through to the workflow-service."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "filters": {
+                        "type": "object",
+                        "description": "Optional. Common keys: jobMasterId, status, from, to, limit."
+                    }
+                }),
+                vec!["domain".to_string()],
+            ),
+        },
+        Tool {
+            name: "get-val-workflow-execution".to_string(),
+            description:
+                "Fetch one workflow execution's full record — status, start/end times, plugin \
+                 step results, errors, and output. Use when triaging a specific run reported by \
+                 `list-val-workflow-executions`."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "id": { "type": "string", "description": "Execution id" }
+                }),
+                vec!["domain".to_string(), "id".to_string()],
+            ),
+        },
+        Tool {
+            name: "get-val-workflow-plugin-schema".to_string(),
             description:
                 "Fetch the JSON schema for a plugin's `params`. \
-                 Use this to construct a valid `data.workflow.plugins[].params` block before calling `create-workflow`."
+                 Use this to construct a valid `data.workflow.plugins[].params` block before calling `create-val-workflow`."
                     .to_string(),
             input_schema: InputSchema::with_properties(
                 json!({
@@ -143,7 +242,7 @@ pub fn tools() -> Vec<Tool> {
                     },
                     "plugin_name": {
                         "type": "string",
-                        "description": "Plugin class name from `list-workflow-plugins` (e.g. 'SQLWorkflowV2Plugin')"
+                        "description": "Plugin class name from `list-val-workflow-plugins` (e.g. 'SQLWorkflowV2Plugin')"
                     }
                 }),
                 vec!["domain".to_string(), "plugin_name".to_string()],
@@ -158,7 +257,7 @@ pub fn tools() -> Vec<Tool> {
 
 pub async fn call(name: &str, args: Value) -> ToolResult {
     match name {
-        "create-workflow" => {
+        "create-val-workflow" => {
             let domain = require_str!(args, "domain");
             let wf_name = require_str!(args, "name");
             let data = match args.get("data") {
@@ -178,11 +277,11 @@ pub async fn call(name: &str, args: Value) -> ToolResult {
 
             match workflows::create_workflow(&domain, body).await {
                 Ok(v) => ToolResult::json(&v),
-                Err(e) => ToolResult::error(format!("create-workflow failed: {}", e)),
+                Err(e) => ToolResult::error(format!("create-val-workflow failed: {}", e)),
             }
         }
 
-        "update-workflow" => {
+        "update-val-workflow" => {
             let domain = require_str!(args, "domain");
             let id = require_str!(args, "id");
             let updates = match args.get("updates") {
@@ -197,11 +296,11 @@ pub async fn call(name: &str, args: Value) -> ToolResult {
 
             match workflows::update_workflow(&domain, &id, updates, &mode).await {
                 Ok(v) => ToolResult::json(&v),
-                Err(e) => ToolResult::error(format!("update-workflow failed: {}", e)),
+                Err(e) => ToolResult::error(format!("update-val-workflow failed: {}", e)),
             }
         }
 
-        "execute-workflow" => {
+        "execute-val-workflow" => {
             let domain = require_str!(args, "domain");
             let id = require_str!(args, "id");
             let overrides = args.get("overrides").and_then(|v| {
@@ -210,24 +309,82 @@ pub async fn call(name: &str, args: Value) -> ToolResult {
 
             match workflows::execute_workflow(&domain, &id, overrides).await {
                 Ok(v) => ToolResult::json(&v),
-                Err(e) => ToolResult::error(format!("execute-workflow failed: {}", e)),
+                Err(e) => ToolResult::error(format!("execute-val-workflow failed: {}", e)),
             }
         }
 
-        "list-workflow-plugins" => {
+        "list-val-workflow-plugins" => {
             let domain = require_str!(args, "domain");
             match workflows::list_plugins(&domain).await {
                 Ok(v) => ToolResult::json(&v),
-                Err(e) => ToolResult::error(format!("list-workflow-plugins failed: {}", e)),
+                Err(e) => ToolResult::error(format!("list-val-workflow-plugins failed: {}", e)),
             }
         }
 
-        "get-workflow-plugin-schema" => {
+        "list-val-workflows" => {
+            let domain = require_str!(args, "domain");
+            let filters = args.get("filters").and_then(|v| {
+                if v.is_object() { Some(v.clone()) } else { None }
+            });
+            match workflows::list_workflows(&domain, filters).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("list-val-workflows failed: {}", e)),
+            }
+        }
+
+        "get-val-workflow" => {
+            let domain = require_str!(args, "domain");
+            let id = require_str!(args, "id");
+            match workflows::get_workflow(&domain, &id).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("get-val-workflow failed: {}", e)),
+            }
+        }
+
+        "pause-val-workflow" => {
+            let domain = require_str!(args, "domain");
+            let id = require_str!(args, "id");
+            match workflows::pause_workflow(&domain, &id).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("pause-val-workflow failed: {}", e)),
+            }
+        }
+
+        "resume-val-workflow" => {
+            let domain = require_str!(args, "domain");
+            let id = require_str!(args, "id");
+            match workflows::resume_workflow(&domain, &id).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("resume-val-workflow failed: {}", e)),
+            }
+        }
+
+        "list-val-workflow-executions" => {
+            let domain = require_str!(args, "domain");
+            let filters = args.get("filters").and_then(|v| {
+                if v.is_object() { Some(v.clone()) } else { None }
+            });
+            match workflows::list_workflow_executions(&domain, filters).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("list-val-workflow-executions failed: {}", e)),
+            }
+        }
+
+        "get-val-workflow-execution" => {
+            let domain = require_str!(args, "domain");
+            let id = require_str!(args, "id");
+            match workflows::get_workflow_execution(&domain, &id).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("get-val-workflow-execution failed: {}", e)),
+            }
+        }
+
+        "get-val-workflow-plugin-schema" => {
             let domain = require_str!(args, "domain");
             let plugin_name = require_str!(args, "plugin_name");
             match workflows::get_plugin_schema(&domain, &plugin_name).await {
                 Ok(v) => ToolResult::json(&v),
-                Err(e) => ToolResult::error(format!("get-workflow-plugin-schema failed: {}", e)),
+                Err(e) => ToolResult::error(format!("get-val-workflow-plugin-schema failed: {}", e)),
             }
         }
 

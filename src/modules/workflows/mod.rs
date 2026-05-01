@@ -44,7 +44,7 @@ where
 /// List available workflow plugin classes for a domain.
 /// GET /api/v1/workflow/plugins
 pub async fn list_plugins(domain: &str) -> CmdResult<Value> {
-    with_auth_retry(domain, "list-workflow-plugins", |base_url, token| {
+    with_auth_retry(domain, "list-val-workflow-plugins", |base_url, token| {
         let domain = domain.to_string();
         async move {
             val_api_request(
@@ -65,7 +65,7 @@ pub async fn list_plugins(domain: &str) -> CmdResult<Value> {
 /// GET /api/v1/workflow/plugins/:name/schema
 pub async fn get_plugin_schema(domain: &str, plugin_name: &str) -> CmdResult<Value> {
     let path = format!("/api/v1/workflow/plugins/{}/schema", plugin_name);
-    with_auth_retry(domain, "get-workflow-plugin-schema", |base_url, token| {
+    with_auth_retry(domain, "get-val-workflow-plugin-schema", |base_url, token| {
         let path = path.clone();
         let domain = domain.to_string();
         async move {
@@ -104,7 +104,7 @@ pub async fn create_workflow(domain: &str, body: Value) -> CmdResult<Value> {
         }
     }
 
-    with_auth_retry(domain, "create-workflow", |base_url, token| {
+    with_auth_retry(domain, "create-val-workflow", |base_url, token| {
         let body = body.clone();
         let domain = domain.to_string();
         async move {
@@ -148,7 +148,7 @@ pub async fn update_workflow(
     };
     let path = format!("/api/v1/workflow/{}", id);
 
-    with_auth_retry(domain, "update-workflow", |base_url, token| {
+    with_auth_retry(domain, "update-val-workflow", |base_url, token| {
         let body = body.clone();
         let path = path.clone();
         let method = method.to_string();
@@ -161,6 +161,163 @@ pub async fn update_workflow(
                 &path,
                 &[("domain", domain.as_str())],
                 Some(body),
+            )
+            .await
+        }
+    })
+    .await
+}
+
+// ============================================================================
+// Read-side discovery
+// ============================================================================
+
+/// List all workflows in a domain.
+/// GET /api/v1/workflow/?domain=<domain>
+pub async fn list_workflows(domain: &str, filters: Option<Value>) -> CmdResult<Value> {
+    let mut query: Vec<(String, String)> = vec![("domain".to_string(), domain.to_string())];
+    if let Some(Value::Object(map)) = filters {
+        for (k, v) in map.into_iter() {
+            let s = match v {
+                Value::String(s) => s,
+                Value::Number(n) => n.to_string(),
+                Value::Bool(b) => b.to_string(),
+                _ => continue,
+            };
+            query.push((k, s));
+        }
+    }
+    with_auth_retry(domain, "list-val-workflows", |base_url, token| {
+        let query = query.clone();
+        async move {
+            let q: Vec<(&str, &str)> = query.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+            val_api_request(&base_url, &token, "GET", "/api/v1/workflow/", &q, None).await
+        }
+    })
+    .await
+}
+
+/// Fetch one workflow's full job definition.
+/// GET /api/v1/workflow/:id?domain=<domain>
+pub async fn get_workflow(domain: &str, id: &str) -> CmdResult<Value> {
+    if id.trim().is_empty() {
+        return Err(CommandError::Config("'id' cannot be empty".to_string()));
+    }
+    let path = format!("/api/v1/workflow/{}", id);
+    with_auth_retry(domain, "get-val-workflow", |base_url, token| {
+        let path = path.clone();
+        let domain = domain.to_string();
+        async move {
+            val_api_request(
+                &base_url,
+                &token,
+                "GET",
+                &path,
+                &[("domain", domain.as_str())],
+                None,
+            )
+            .await
+        }
+    })
+    .await
+}
+
+// ============================================================================
+// Operational — pause / resume
+// ============================================================================
+
+pub async fn pause_workflow(domain: &str, id: &str) -> CmdResult<Value> {
+    if id.trim().is_empty() {
+        return Err(CommandError::Config("'id' cannot be empty".to_string()));
+    }
+    let path = format!("/api/v1/workflow/{}/pause", id);
+    with_auth_retry(domain, "pause-val-workflow", |base_url, token| {
+        let path = path.clone();
+        let domain = domain.to_string();
+        async move {
+            val_api_request(
+                &base_url,
+                &token,
+                "POST",
+                &path,
+                &[("domain", domain.as_str())],
+                None,
+            )
+            .await
+        }
+    })
+    .await
+}
+
+pub async fn resume_workflow(domain: &str, id: &str) -> CmdResult<Value> {
+    if id.trim().is_empty() {
+        return Err(CommandError::Config("'id' cannot be empty".to_string()));
+    }
+    let path = format!("/api/v1/workflow/{}/resume", id);
+    with_auth_retry(domain, "resume-val-workflow", |base_url, token| {
+        let path = path.clone();
+        let domain = domain.to_string();
+        async move {
+            val_api_request(
+                &base_url,
+                &token,
+                "POST",
+                &path,
+                &[("domain", domain.as_str())],
+                None,
+            )
+            .await
+        }
+    })
+    .await
+}
+
+// ============================================================================
+// Execution history
+// ============================================================================
+
+pub async fn list_workflow_executions(
+    domain: &str,
+    filters: Option<Value>,
+) -> CmdResult<Value> {
+    let mut query: Vec<(String, String)> = vec![("domain".to_string(), domain.to_string())];
+    if let Some(Value::Object(map)) = filters {
+        for (k, v) in map.into_iter() {
+            let s = match v {
+                Value::String(s) => s,
+                Value::Number(n) => n.to_string(),
+                Value::Bool(b) => b.to_string(),
+                _ => continue,
+            };
+            query.push((k, s));
+        }
+    }
+    with_auth_retry(domain, "list-val-workflow-executions", |base_url, token| {
+        let query = query.clone();
+        async move {
+            let q: Vec<(&str, &str)> = query.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+            val_api_request(&base_url, &token, "GET", "/api/v1/workflow/executions", &q, None).await
+        }
+    })
+    .await
+}
+
+pub async fn get_workflow_execution(domain: &str, id: &str) -> CmdResult<Value> {
+    if id.trim().is_empty() {
+        return Err(CommandError::Config("'id' cannot be empty".to_string()));
+    }
+    let path = format!("/api/v1/workflow/executions/{}", id);
+    with_auth_retry(domain, "get-val-workflow-execution", |base_url, token| {
+        let path = path.clone();
+        let domain = domain.to_string();
+        async move {
+            val_api_request(
+                &base_url,
+                &token,
+                "GET",
+                &path,
+                &[("domain", domain.as_str())],
+                None,
             )
             .await
         }
@@ -183,7 +340,7 @@ pub async fn execute_workflow(
         None => (format!("/api/v1/workflow/{}/rerun", id), None),
     };
 
-    with_auth_retry(domain, "execute-workflow", |base_url, token| {
+    with_auth_retry(domain, "execute-val-workflow", |base_url, token| {
         let path = path.clone();
         let body = body.clone();
         let domain = domain.to_string();

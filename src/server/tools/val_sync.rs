@@ -182,28 +182,6 @@ pub fn tools() -> Vec<Tool> {
             ),
         },
         Tool {
-            name: "check-all-domain-drive-files".to_string(),
-            description: "Check VAL Drive files across ALL production domains. Scans each domain's val_drive folders recursively and reports unprocessed files with their age. Files older than 24h are flagged as stale. Use this for morning SOD checks or to verify Drive uploads are being processed.".to_string(),
-            input_schema: InputSchema::empty(),
-        },
-        Tool {
-            name: "list-drive-files".to_string(),
-            description: "List files and folders in a VAL Drive path for a domain. Shows file names, sizes, and ages. Use to check for unprocessed files or verify Drive uploads.".to_string(),
-            input_schema: InputSchema::with_properties(
-                json!({
-                    "domain": {
-                        "type": "string",
-                        "description": "VAL domain name (e.g., 'koi', 'suntec')"
-                    },
-                    "folder": {
-                        "type": "string",
-                        "description": "Folder path in Drive (e.g., 'val_drive/RevRec/01_SourceReports'). Defaults to 'val_drive'."
-                    }
-                }),
-                vec!["domain".to_string()],
-            ),
-        },
-        Tool {
             name: "execute-val-sql".to_string(),
             description: "Execute a SQL query on a VAL domain. Provide SQL directly or as a file path. Returns summary and data. Only SELECT queries are allowed.".to_string(),
             input_schema: InputSchema::with_properties(
@@ -434,21 +412,6 @@ pub async fn call(name: &str, args: Value) -> ToolResult {
                     }
                 }
             }
-        }
-
-        "check-all-domain-drive-files" => {
-            handle_check_all_domain_drive_files().await
-        }
-
-        "list-drive-files" => {
-            let domain = require_domain!(args);
-            let folder = args
-                .get("folder")
-                .and_then(|f| f.as_str())
-                .unwrap_or("val_drive")
-                .to_string();
-
-            handle_list_drive_files(&domain, &folder).await
         }
 
         "execute-val-sql" => {
@@ -1004,6 +967,10 @@ async fn handle_sync_all_domain_sod_tables(date: &str) -> ToolResult {
 
 /// Check Drive files across all production domains
 /// Recursively scans val_drive folders and reports unprocessed files with age
+pub async fn handle_check_all_domain_drive_files_public() -> ToolResult {
+    handle_check_all_domain_drive_files().await
+}
+
 async fn handle_check_all_domain_drive_files() -> ToolResult {
     let domains = match get_production_domains() {
         Ok(d) => d,
@@ -1397,6 +1364,10 @@ fn is_file_stale(
 }
 
 /// List Drive files and folders for a domain
+pub async fn handle_list_drive_files_public(domain: &str, folder: &str) -> ToolResult {
+    handle_list_drive_files(domain, folder).await
+}
+
 async fn handle_list_drive_files(domain: &str, folder: &str) -> ToolResult {
     let mut lines = vec![format!("## Drive: {} / {}\n", domain, folder)];
 

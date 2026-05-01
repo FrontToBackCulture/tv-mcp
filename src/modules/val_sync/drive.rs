@@ -54,6 +54,143 @@ fn is_auth_body(body: &str) -> bool {
         || body.contains("invalid signature")
 }
 
+async fn drive_request(
+    domain: &str,
+    method: reqwest::Method,
+    path: &str,
+    query: Vec<(String, String)>,
+    body: Option<serde_json::Value>,
+) -> CmdResult<serde_json::Value> {
+    let domain_config = get_domain_config(domain)?;
+    let api_domain = domain_config.api_domain().to_string();
+    let base_url = format!("https://{}.thinkval.io", api_domain);
+
+    let send = |token: String| {
+        let url = format!("{}{}", base_url, path);
+        let api_domain = api_domain.clone();
+        let mut q = query.clone();
+        q.push(("token".to_string(), token));
+        let body = body.clone();
+        let method = method.clone();
+        async move {
+            let client = crate::HTTP_CLIENT.clone();
+            let mut req = client
+                .request(method, &url)
+                .header("sub_domain", &api_domain)
+                .query(&q);
+            if let Some(b) = body {
+                req = req.json(&b);
+            }
+            req.send().await
+        }
+    };
+
+    let (token, _) = auth::ensure_auth(domain).await?;
+    let resp = send(token).await?;
+    let status = resp.status().as_u16();
+    let resp = if is_auth_status(status) {
+        let (new_token, _) = auth::reauth(domain).await?;
+        send(new_token).await?
+    } else {
+        resp
+    };
+
+    let status = resp.status();
+    let bytes = resp.bytes().await?;
+    if !status.is_success() {
+        let body = String::from_utf8_lossy(&bytes).to_string();
+        if is_auth_body(&body) {
+            return Err(CommandError::Network(format!("auth error: {}", body)));
+        }
+        return Err(CommandError::Http {
+            status: status.as_u16(),
+            body,
+        });
+    }
+    if bytes.is_empty() {
+        return Ok(serde_json::Value::Null);
+    }
+    serde_json::from_slice(&bytes).map_err(|e| CommandError::Network(format!("parse: {}", e)))
+}
+
+pub async fn val_drive_get_file(
+    domain: String,
+    file_id: String,
+) -> CmdResult<serde_json::Value> {
+    if file_id.trim().is_empty() {
+        return Err(CommandError::Config("'file_id' cannot be empty".to_string()));
+    }
+    let path = format!(
+        "/api/v1/val_drive/files/{}",
+        urlencoding::encode(&file_id)
+    );
+    drive_request(&domain, reqwest::Method::GET, &path, vec![], None).await
+}
+
+pub async fn val_drive_check_file_exists(
+    domain: String,
+    file_path: String,
+) -> CmdResult<serde_json::Value> {
+    if file_path.trim().is_empty() {
+        return Err(CommandError::Config("'path' cannot be empty".to_string()));
+    }
+    let q = vec![("path".to_string(), file_path)];
+    drive_request(
+        &domain,
+        reqwest::Method::GET,
+        "/api/v1/val_drive/files/exists",
+        q,
+        None,
+    )
+    .await
+}
+
+pub async fn val_drive_create_folder(
+    domain: String,
+    parent_folder_id: String,
+    body: serde_json::Value,
+) -> CmdResult<serde_json::Value> {
+    if parent_folder_id.trim().is_empty() {
+        return Err(CommandError::Config(
+            "'parent_folder_id' cannot be empty".to_string(),
+        ));
+    }
+    let path = format!(
+        "/api/v1/val_drive/folders/{}",
+        urlencoding::encode(&parent_folder_id)
+    );
+    drive_request(&domain, reqwest::Method::POST, &path, vec![], Some(body)).await
+}
+
+pub async fn val_drive_rename_file(
+    domain: String,
+    file_id: String,
+    body: serde_json::Value,
+) -> CmdResult<serde_json::Value> {
+    if file_id.trim().is_empty() {
+        return Err(CommandError::Config("'file_id' cannot be empty".to_string()));
+    }
+    let path = format!(
+        "/api/v1/val_drive/files/rename/{}",
+        urlencoding::encode(&file_id)
+    );
+    drive_request(&domain, reqwest::Method::POST, &path, vec![], Some(body)).await
+}
+
+pub async fn val_drive_move_file(
+    domain: String,
+    body: serde_json::Value,
+) -> CmdResult<serde_json::Value> {
+    drive_request(
+        &domain,
+        reqwest::Method::POST,
+        "/api/v1/val_drive/files/move",
+        vec![],
+        Some(body),
+    )
+    .await
+}
+
 // ============================================================================
 // Commands
 // ============================================================================

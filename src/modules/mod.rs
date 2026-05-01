@@ -1,6 +1,7 @@
 pub mod apollo;
 pub mod blog;
 pub mod crm;
+pub mod dashboards;
 pub mod discussions;
 pub mod docs;
 pub mod email;

@@ -53,6 +53,50 @@ pub fn tools() -> Vec<Tool> {
             ),
         },
         Tool {
+            name: "list-val-spaces".to_string(),
+            description:
+                "List every VAL space (UI: 'Project') in a domain. Returns id, name, description, \
+                 and audit fields for each space. Use this to discover space IDs before calling \
+                 zone or table tools — VAL space IDs are not stable string slugs but numeric/uuid \
+                 identifiers."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name (e.g. 'lab', 'koi')" }
+                }),
+                vec!["domain".to_string()],
+            ),
+        },
+        Tool {
+            name: "get-val-space".to_string(),
+            description:
+                "Fetch a single VAL space's metadata row (project_name, project_desc, audit \
+                 fields). Use this before `update-val-space` to see the current state."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "space_id": { "type": "string", "description": "Space (project) id" }
+                }),
+                vec!["domain".to_string(), "space_id".to_string()],
+            ),
+        },
+        Tool {
+            name: "list-val-space-zones".to_string(),
+            description:
+                "List every zone (UI: 'Phase') under a VAL space. Returns the phase rows from \
+                 phase_tbl: phase_id, phase_name, phase_desc, audit fields. Use this to map a \
+                 space's structure before placing tables or queries."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "space_id": { "type": "string", "description": "Parent space (project) id" }
+                }),
+                vec!["domain".to_string(), "space_id".to_string()],
+            ),
+        },
+        Tool {
             name: "create-val-zone".to_string(),
             description:
                 "Create a new VAL zone (UI label: 'Phase') under a space. \
@@ -93,6 +137,54 @@ pub fn tools() -> Vec<Tool> {
             ),
         },
         Tool {
+            name: "list-val-zones".to_string(),
+            description:
+                "List zones (UI: 'Phase') across ALL spaces in a domain. Use this when you need \
+                 to find a zone by name without knowing its parent space. Pass `filters` for \
+                 query-string narrowing (server passes them through to the listZones helper). \
+                 For zones in one specific space, use `list-val-space-zones` instead."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "filters": {
+                        "type": "object",
+                        "description": "Optional flat key→string|number|bool map merged into the query string."
+                    }
+                }),
+                vec!["domain".to_string()],
+            ),
+        },
+        Tool {
+            name: "get-val-zone".to_string(),
+            description:
+                "Fetch a single VAL zone's metadata row (phase_id, phase_name, phase_desc, \
+                 phase_pr_id, audit fields). Use before `update-val-zone` to see current state."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "zone_id": { "type": "string", "description": "Zone (phase) id" }
+                }),
+                vec!["domain".to_string(), "zone_id".to_string()],
+            ),
+        },
+        Tool {
+            name: "list-val-zone-tables".to_string(),
+            description:
+                "List every table and perspective inside a VAL zone. Returns the zone's content \
+                 — actual repo tables and perspective definitions (transpose / union views). Use \
+                 this to map a zone before placing or cloning tables."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "zone_id": { "type": "string", "description": "Zone (phase) id" }
+                }),
+                vec!["domain".to_string(), "zone_id".to_string()],
+            ),
+        },
+        Tool {
             name: "create-val-table".to_string(),
             description:
                 "Create a new VAL table inside a zone. \
@@ -114,6 +206,153 @@ pub fn tools() -> Vec<Tool> {
                     }
                 }),
                 vec!["domain".to_string(), "zone_id".to_string(), "name".to_string()],
+            ),
+        },
+        Tool {
+            name: "list-val-tables".to_string(),
+            description:
+                "List every VAL table across all spaces and zones in a domain. Pass `filters` for \
+                 query-string narrowing (server passes them through to listTables). Use this to \
+                 search for a table by name or prefix without iterating zones."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "filters": {
+                        "type": "object",
+                        "description": "Optional flat key→string|number|bool map merged into the query string."
+                    }
+                }),
+                vec!["domain".to_string()],
+            ),
+        },
+        Tool {
+            name: "get-val-table".to_string(),
+            description:
+                "Fetch a single VAL table's full definition — table-level metadata plus its \
+                 fields (columns) and link configuration. Use before `update-val-table`, \
+                 `clone-val-table`, or `add-val-table-field` to see the current schema."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "table_id": {
+                        "type": "string",
+                        "description": "Table identifier (custom_tbl_<zone>_<seq> or numeric value)"
+                    }
+                }),
+                vec!["domain".to_string(), "table_id".to_string()],
+            ),
+        },
+        Tool {
+            name: "update-val-table".to_string(),
+            description:
+                "Update an existing VAL table's metadata (display name, prefix, repo_type, \
+                 autocalculate, populated_dates, metadata). Pass `updates` with the fields to \
+                 change. Does NOT modify columns/fields — use `update-val-field` and \
+                 `add-val-table-field(s)` for column changes."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "table_id": {
+                        "type": "string",
+                        "description": "Table identifier (custom_tbl_<zone>_<seq> or numeric value)"
+                    },
+                    "updates": {
+                        "type": "object",
+                        "description": "Fields to update. Common: name (display name), prefix, repo_type, autocalculate, populated_dates, metadata."
+                    }
+                }),
+                vec!["domain".to_string(), "table_id".to_string(), "updates".to_string()],
+            ),
+        },
+        Tool {
+            name: "list-val-table-dependencies".to_string(),
+            description:
+                "List everything that depends on a VAL table — other tables (via linked fields), \
+                 queries that select from it, workflows that read/write it. Run this BEFORE \
+                 restructuring or reassigning a table to surface what would break."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "table_id": {
+                        "type": "string",
+                        "description": "Table identifier (custom_tbl_<zone>_<seq> or numeric value)"
+                    }
+                }),
+                vec!["domain".to_string(), "table_id".to_string()],
+            ),
+        },
+        Tool {
+            name: "remove-val-table-field".to_string(),
+            description:
+                "Remove a column from a VAL table. Drops the data in that column on this table; \
+                 the field definition itself survives in dft_nodefields and can stay assigned to \
+                 other tables. Use `find-val-tables-with-field` first to confirm the field isn't \
+                 still in use elsewhere unexpectedly. `field` must include enough to identify the \
+                 column (e.g. `{ id, column_name }` or `{ dft_nodefields_id, column_name }`)."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "table_id": {
+                        "type": "string",
+                        "description": "Table identifier (custom_tbl_<zone>_<seq> or numeric value)"
+                    },
+                    "zone_id": {
+                        "type": "string",
+                        "description": "Parent zone (phase) id — used for the entity-permission check."
+                    },
+                    "field": {
+                        "type": "object",
+                        "description": "Field identifier payload — at minimum `{ id, column_name }` or `{ dft_nodefields_id, column_name }`."
+                    }
+                }),
+                vec![
+                    "domain".to_string(),
+                    "table_id".to_string(),
+                    "zone_id".to_string(),
+                    "field".to_string(),
+                ],
+            ),
+        },
+        Tool {
+            name: "list-val-fields".to_string(),
+            description:
+                "List every field definition in a VAL domain (across all tables). The only path \
+                 to inspect field defs via MCP without raw SQL against `dft_nodefields`. Pass \
+                 `convert: true` for the legacy converted shape (server flag)."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "convert": {
+                        "type": "boolean",
+                        "description": "Optional. If true, returns the converted/legacy shape."
+                    }
+                }),
+                vec!["domain".to_string()],
+            ),
+        },
+        Tool {
+            name: "find-val-tables-with-field".to_string(),
+            description:
+                "Reverse lookup — list every table that has a field matching the given filter. \
+                 Use before renaming or restructuring a column to surface every table affected. \
+                 `filters` must include at least one identifier (e.g. `{ name }` or `{ id }`); \
+                 keys are passed through to the returnTablesWithField helper."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "filters": {
+                        "type": "object",
+                        "description": "Required. Flat key→string|number|bool map. At minimum include `name` or `id`."
+                    }
+                }),
+                vec!["domain".to_string(), "filters".to_string()],
             ),
         },
         Tool {
@@ -226,6 +465,90 @@ pub fn tools() -> Vec<Tool> {
                     "zone_id".to_string(),
                     "tables".to_string(),
                 ],
+            ),
+        },
+        Tool {
+            name: "list-val-queries".to_string(),
+            description:
+                "List every VAL query (datasource) in a domain. Returns id, name, and summary \
+                 metadata for each. Pass `filters` for query-string narrowing — passed through to \
+                 listAllDSQueries. Use to discover query IDs (`dsid`) before `get-val-query`, \
+                 `update-val-query`, `copy-val-query`, or `execute-val-query`."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "filters": {
+                        "type": "object",
+                        "description": "Optional flat key→string|number|bool map merged into the query string."
+                    }
+                }),
+                vec!["domain".to_string()],
+            ),
+        },
+        Tool {
+            name: "get-val-query".to_string(),
+            description:
+                "Fetch a single VAL query's full datasource (basicInfo + queryInfo). The proper \
+                 read path before `update-val-query` — saveDSQuery does a full INSERT, so partial \
+                 updates require fetching the current `datasource` first and merging client-side."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "dsid": {
+                        "type": "string",
+                        "description": "Query id (the `id` from querybuilder_master / list-val-queries)"
+                    }
+                }),
+                vec!["domain".to_string(), "dsid".to_string()],
+            ),
+        },
+        Tool {
+            name: "execute-val-query".to_string(),
+            description:
+                "Run a saved VAL query and return its result rows. Different from \
+                 `execute-val-sql` — this respects the saved query definition, query-level \
+                 permissions, VAL's cache layer, and pagination. Use this to fetch what a user \
+                 would see in a dashboard widget."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "dsid": { "type": "string", "description": "Query id" },
+                    "use_cache": {
+                        "type": "boolean",
+                        "description": "Optional. Use VAL's query cache. Default false."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Optional row limit."
+                    },
+                    "paginate": {
+                        "type": "object",
+                        "description": "Optional pagination params (offset, page, pageSize, sortBy, sortDir, etc.) merged into the query string."
+                    }
+                }),
+                vec!["domain".to_string(), "dsid".to_string()],
+            ),
+        },
+        Tool {
+            name: "test-val-query".to_string(),
+            description:
+                "Validate and dry-run a VAL query payload before saving. Pass `payload` with the \
+                 same shape as a `datasource` (basicInfo + queryInfo). Use this to verify an \
+                 LLM-authored query compiles and returns the expected shape before calling \
+                 `create-val-query` or `update-val-query`."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "payload": {
+                        "type": "object",
+                        "description": "Query payload — same shape as `datasource` (basicInfo, queryInfo)."
+                    }
+                }),
+                vec!["domain".to_string(), "payload".to_string()],
             ),
         },
         Tool {
@@ -371,6 +694,32 @@ pub async fn call(name: &str, args: Value) -> ToolResult {
             }
         }
 
+        "list-val-spaces" => {
+            let domain = require_str!(args, "domain");
+            match val_admin::list_spaces(&domain).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("list-val-spaces failed: {}", e)),
+            }
+        }
+
+        "get-val-space" => {
+            let domain = require_str!(args, "domain");
+            let space_id = require_str!(args, "space_id");
+            match val_admin::get_space(&domain, &space_id).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("get-val-space failed: {}", e)),
+            }
+        }
+
+        "list-val-space-zones" => {
+            let domain = require_str!(args, "domain");
+            let space_id = require_str!(args, "space_id");
+            match val_admin::list_space_zones(&domain, &space_id).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("list-val-space-zones failed: {}", e)),
+            }
+        }
+
         "create-val-zone" => {
             let domain = require_str!(args, "domain");
             let space_id = require_str!(args, "space_id");
@@ -396,6 +745,35 @@ pub async fn call(name: &str, args: Value) -> ToolResult {
             }
         }
 
+        "list-val-zones" => {
+            let domain = require_str!(args, "domain");
+            let filters = args.get("filters").and_then(|v| {
+                if v.is_object() { Some(v.clone()) } else { None }
+            });
+            match val_admin::list_zones(&domain, filters).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("list-val-zones failed: {}", e)),
+            }
+        }
+
+        "get-val-zone" => {
+            let domain = require_str!(args, "domain");
+            let zone_id = require_str!(args, "zone_id");
+            match val_admin::get_zone(&domain, &zone_id).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("get-val-zone failed: {}", e)),
+            }
+        }
+
+        "list-val-zone-tables" => {
+            let domain = require_str!(args, "domain");
+            let zone_id = require_str!(args, "zone_id");
+            match val_admin::list_zone_tables(&domain, &zone_id).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("list-val-zone-tables failed: {}", e)),
+            }
+        }
+
         "create-val-table" => {
             let domain = require_str!(args, "domain");
             let zone_id = require_str!(args, "zone_id");
@@ -413,6 +791,83 @@ pub async fn call(name: &str, args: Value) -> ToolResult {
             {
                 Ok(v) => ToolResult::json(&v),
                 Err(e) => ToolResult::error(format!("create-val-table failed: {}", e)),
+            }
+        }
+
+        "list-val-tables" => {
+            let domain = require_str!(args, "domain");
+            let filters = args.get("filters").and_then(|v| {
+                if v.is_object() { Some(v.clone()) } else { None }
+            });
+            match val_admin::list_tables(&domain, filters).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("list-val-tables failed: {}", e)),
+            }
+        }
+
+        "get-val-table" => {
+            let domain = require_str!(args, "domain");
+            let table_id = require_str!(args, "table_id");
+            match val_admin::get_table(&domain, &table_id).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("get-val-table failed: {}", e)),
+            }
+        }
+
+        "update-val-table" => {
+            let domain = require_str!(args, "domain");
+            let table_id = require_str!(args, "table_id");
+            let updates = match args.get("updates") {
+                Some(v) if v.is_object() => v.clone(),
+                _ => return ToolResult::error("'updates' must be an object".to_string()),
+            };
+            match val_admin::update_table(&domain, &table_id, updates).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("update-val-table failed: {}", e)),
+            }
+        }
+
+        "list-val-table-dependencies" => {
+            let domain = require_str!(args, "domain");
+            let table_id = require_str!(args, "table_id");
+            match val_admin::list_table_dependencies(&domain, &table_id).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("list-val-table-dependencies failed: {}", e)),
+            }
+        }
+
+        "remove-val-table-field" => {
+            let domain = require_str!(args, "domain");
+            let table_id = require_str!(args, "table_id");
+            let zone_id = require_str!(args, "zone_id");
+            let field = match args.get("field") {
+                Some(v) if v.is_object() => v.clone(),
+                _ => return ToolResult::error("'field' must be an object".to_string()),
+            };
+            match val_admin::remove_table_field(&domain, &table_id, &zone_id, field).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("remove-val-table-field failed: {}", e)),
+            }
+        }
+
+        "list-val-fields" => {
+            let domain = require_str!(args, "domain");
+            let convert = args.get("convert").and_then(|v| v.as_bool());
+            match val_admin::list_fields(&domain, convert).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("list-val-fields failed: {}", e)),
+            }
+        }
+
+        "find-val-tables-with-field" => {
+            let domain = require_str!(args, "domain");
+            let filters = match args.get("filters") {
+                Some(v) if v.is_object() => v.clone(),
+                _ => return ToolResult::error("'filters' must be an object".to_string()),
+            };
+            match val_admin::find_tables_with_field(&domain, filters).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("find-val-tables-with-field failed: {}", e)),
             }
         }
 
@@ -485,6 +940,52 @@ pub async fn call(name: &str, args: Value) -> ToolResult {
             match val_admin::assign_table_to_zone(&domain, &zone_id, tables).await {
                 Ok(v) => ToolResult::json(&v),
                 Err(e) => ToolResult::error(format!("assign-val-table-to-zone failed: {}", e)),
+            }
+        }
+
+        "list-val-queries" => {
+            let domain = require_str!(args, "domain");
+            let filters = args.get("filters").and_then(|v| {
+                if v.is_object() { Some(v.clone()) } else { None }
+            });
+            match val_admin::list_queries(&domain, filters).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("list-val-queries failed: {}", e)),
+            }
+        }
+
+        "get-val-query" => {
+            let domain = require_str!(args, "domain");
+            let dsid = require_str!(args, "dsid");
+            match val_admin::get_query(&domain, &dsid).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("get-val-query failed: {}", e)),
+            }
+        }
+
+        "execute-val-query" => {
+            let domain = require_str!(args, "domain");
+            let dsid = require_str!(args, "dsid");
+            let use_cache = args.get("use_cache").and_then(|v| v.as_bool());
+            let limit = args.get("limit").and_then(|v| v.as_u64());
+            let paginate = args.get("paginate").and_then(|v| {
+                if v.is_object() { Some(v.clone()) } else { None }
+            });
+            match val_admin::execute_query(&domain, &dsid, use_cache, limit, paginate).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("execute-val-query failed: {}", e)),
+            }
+        }
+
+        "test-val-query" => {
+            let domain = require_str!(args, "domain");
+            let payload = match args.get("payload") {
+                Some(v) if v.is_object() => v.clone(),
+                _ => return ToolResult::error("'payload' must be an object".to_string()),
+            };
+            match val_admin::test_query(&domain, payload).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("test-val-query failed: {}", e)),
             }
         }
 

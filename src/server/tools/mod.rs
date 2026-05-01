@@ -7,7 +7,9 @@ pub mod email;
 pub mod generate;
 pub mod intercom;
 pub mod docgen;
+pub mod dashboards;
 pub mod val_admin;
+pub mod val_drive;
 pub mod val_sync;
 pub mod workflows;
 pub mod discussions;
@@ -54,6 +56,12 @@ pub fn list_tools() -> Vec<Tool> {
 
     // VAL admin authoring tools (spaces / zones / tables)
     tools.extend(val_admin::tools());
+
+    // VAL Drive — file/folder operations
+    tools.extend(val_drive::tools());
+
+    // VAL Dashboards
+    tools.extend(dashboards::tools());
 
     // Discussion tools
     tools.extend(discussions::tools());
@@ -143,24 +151,52 @@ pub async fn call_tool(name: &str, arguments: Value) -> ToolResult {
     }
 
     // VAL Sync tools
-    if name.starts_with("sync-val-") || name.starts_with("sync-all-domain-") || name == "execute-val-sql" || name == "execute-supabase-sql" || name == "list-drive-files" || name == "check-all-domain-drive-files" {
+    if name.starts_with("sync-val-") || name.starts_with("sync-all-domain-") || name == "execute-val-sql" || name == "execute-supabase-sql" {
         return val_sync::call(name, arguments).await;
     }
 
+    // VAL Drive tools
+    if name == "list-val-drive-folders" || name == "list-val-drive-files"
+        || name == "check-val-drive-files-all-domains" || name == "check-val-drive-file-exists"
+        || name == "get-val-drive-file" || name == "create-val-drive-folder"
+        || name == "rename-val-drive-file" || name == "move-val-drive-file" {
+        return val_drive::call(name, arguments).await;
+    }
+
+    // VAL Dashboards
+    if name == "list-val-dashboards" || name == "get-val-dashboard"
+        || name == "create-val-dashboard" || name == "update-val-dashboard"
+        || name == "duplicate-val-dashboard" {
+        return dashboards::call(name, arguments).await;
+    }
+
     // Workflow authoring tools
-    if name == "create-workflow" || name == "update-workflow" || name == "execute-workflow"
-        || name == "list-workflow-plugins" || name == "get-workflow-plugin-schema" {
+    if name == "create-val-workflow" || name == "update-val-workflow" || name == "execute-val-workflow"
+        || name == "list-val-workflow-plugins" || name == "get-val-workflow-plugin-schema"
+        || name == "list-val-workflows" || name == "get-val-workflow"
+        || name == "pause-val-workflow" || name == "resume-val-workflow"
+        || name == "list-val-workflow-executions" || name == "get-val-workflow-execution" {
         return workflows::call(name, arguments).await;
     }
 
     // VAL admin authoring tools (spaces, zones, tables, fields, queries)
     if name == "create-val-space" || name == "update-val-space"
+        || name == "list-val-spaces" || name == "get-val-space"
+        || name == "list-val-space-zones"
         || name == "create-val-zone" || name == "update-val-zone"
+        || name == "list-val-zones" || name == "get-val-zone"
+        || name == "list-val-zone-tables"
         || name == "create-val-table" || name == "clone-val-table"
+        || name == "update-val-table" || name == "get-val-table"
+        || name == "list-val-tables" || name == "list-val-table-dependencies"
         || name == "add-val-table-field" || name == "add-val-table-fields"
+        || name == "remove-val-table-field"
         || name == "update-val-field" || name == "assign-val-table-to-zone"
+        || name == "list-val-fields" || name == "find-val-tables-with-field"
         || name == "create-val-query" || name == "update-val-query"
-        || name == "copy-val-query" {
+        || name == "copy-val-query"
+        || name == "list-val-queries" || name == "get-val-query"
+        || name == "execute-val-query" || name == "test-val-query" {
         return val_admin::call(name, arguments).await;
     }
 

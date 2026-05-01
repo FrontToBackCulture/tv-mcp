@@ -77,32 +77,68 @@ fn categorize(name: &str) -> &'static str {
         "FY Review"
     } else if name.starts_with("qbo-") {
         "QuickBooks Online"
-    } else if name == "create-workflow"
-        || name == "update-workflow"
-        || name == "execute-workflow"
-        || name == "list-workflow-plugins"
-        || name == "get-workflow-plugin-schema"
+    } else if name == "create-val-workflow"
+        || name == "update-val-workflow"
+        || name == "execute-val-workflow"
+        || name == "list-val-workflow-plugins"
+        || name == "get-val-workflow-plugin-schema"
+        || name == "list-val-workflows"
+        || name == "get-val-workflow"
+        || name == "pause-val-workflow"
+        || name == "resume-val-workflow"
+        || name == "list-val-workflow-executions"
+        || name == "get-val-workflow-execution"
         || name.ends_with("-val-space")
+        || name == "list-val-spaces"
+        || name == "list-val-space-zones"
         || name.ends_with("-val-zone")
+        || name == "list-val-zones"
+        || name == "list-val-zone-tables"
         || name == "create-val-table"
+        || name == "update-val-table"
+        || name == "get-val-table"
+        || name == "list-val-tables"
+        || name == "list-val-table-dependencies"
         || name == "clone-val-table"
         || name == "assign-val-table-to-zone"
         || name == "add-val-table-field"
         || name == "add-val-table-fields"
+        || name == "remove-val-table-field"
         || name == "update-val-field"
+        || name == "list-val-fields"
+        || name == "find-val-tables-with-field"
         || name == "create-val-query"
         || name == "update-val-query"
         || name == "copy-val-query"
+        || name == "list-val-queries"
+        || name == "get-val-query"
+        || name == "execute-val-query"
+        || name == "test-val-query"
     {
         "VAL Admin"
     } else if name == "execute-val-sql" {
         "VAL SQL"
     } else if name == "execute-supabase-sql" {
         "Supabase SQL"
-    } else if name.starts_with("sync-all-domain-")
-        || name == "check-all-domain-drive-files"
-        || name == "list-drive-files"
+    } else if name == "list-val-dashboards"
+        || name == "get-val-dashboard"
+        || name == "create-val-dashboard"
+        || name == "update-val-dashboard"
+        || name == "duplicate-val-dashboard"
     {
+        "VAL Admin"
+    } else if name == "list-val-drive-folders" || name == "create-val-drive-folder" {
+        // Folder *structure* ops are VAL configuration, not data plane
+        "VAL Admin"
+    } else if name == "list-val-drive-files"
+        || name == "check-val-drive-files-all-domains"
+        || name == "check-val-drive-file-exists"
+        || name == "get-val-drive-file"
+        || name == "rename-val-drive-file"
+        || name == "move-val-drive-file"
+    {
+        "VAL Drive"
+    } else if name.starts_with("sync-all-domain-") {
         "VAL Monitoring"
     } else if name.starts_with("sync-val-") {
         "VAL Setup Sync"
@@ -162,11 +198,14 @@ fn source_file_for(name: &str) -> &'static str {
         "Generation" => "src/server/tools/generate.rs",
         "VAL Setup Sync" => "src/server/tools/val_sync.rs",
         "VAL Monitoring" => "src/server/tools/val_sync.rs",
+        "VAL Drive" => "src/server/tools/val_drive.rs",
+        "VAL Admin" if matches!(name, "list-val-drive-folders" | "create-val-drive-folder") =>
+            "src/server/tools/val_drive.rs",
         "VAL SQL" => "src/server/tools/val_sync.rs",
         "Supabase SQL" => "src/server/tools/val_sync.rs",
         "VAL Admin" if matches!(name,
-            "create-workflow" | "update-workflow" | "execute-workflow"
-            | "list-workflow-plugins" | "get-workflow-plugin-schema"
+            "create-val-workflow" | "update-val-workflow" | "execute-val-workflow"
+            | "list-val-workflow-plugins" | "get-val-workflow-plugin-schema"
         ) => "src/server/tools/workflows.rs",
         "VAL Admin" => "src/server/tools/val_admin.rs",
         "CRM" => "src/server/tools/crm.rs",
