@@ -1,8 +1,7 @@
 // VAL Drive MCP Tools — file/folder operations on the S3-backed Drive layer.
-// 8 tools: list-val-drive-folders, list-val-drive-files,
+// 7 tools: list-val-drive-folders, list-val-drive-files,
 //          check-val-drive-files-all-domains, check-val-drive-file-exists,
-//          get-val-drive-file, create-val-drive-folder, rename-val-drive-file,
-//          move-val-drive-file.
+//          create-val-drive-folder, rename-val-drive-file, move-val-drive-file.
 //
 // No delete-* tools by design (policy). Async upload + bulk download skipped
 // (binary streams don't fit MCP JSON cleanly).
@@ -87,24 +86,6 @@ pub fn tools() -> Vec<Tool> {
                     }
                 }),
                 vec!["domain".to_string(), "path".to_string()],
-            ),
-        },
-        Tool {
-            name: "get-val-drive-file".to_string(),
-            description:
-                "Fetch one Drive file's metadata — id, name, size, content type, last modified, \
-                 parent folder. Use after `check-val-drive-files-all-domains` flags a stale file \
-                 to inspect details."
-                    .to_string(),
-            input_schema: InputSchema::with_properties(
-                json!({
-                    "domain": { "type": "string", "description": "VAL domain name" },
-                    "file_id": {
-                        "type": "string",
-                        "description": "Drive file id (typically the full path or S3 key)."
-                    }
-                }),
-                vec!["domain".to_string(), "file_id".to_string()],
             ),
         },
         Tool {
@@ -210,15 +191,6 @@ pub async fn call(name: &str, args: Value) -> ToolResult {
             match drive::val_drive_check_file_exists(domain, path).await {
                 Ok(v) => ToolResult::json(&v),
                 Err(e) => ToolResult::error(format!("check-val-drive-file-exists failed: {}", e)),
-            }
-        }
-
-        "get-val-drive-file" => {
-            let domain = require_str!(args, "domain");
-            let file_id = require_str!(args, "file_id");
-            match drive::val_drive_get_file(domain, file_id).await {
-                Ok(v) => ToolResult::json(&v),
-                Err(e) => ToolResult::error(format!("get-val-drive-file failed: {}", e)),
             }
         }
 

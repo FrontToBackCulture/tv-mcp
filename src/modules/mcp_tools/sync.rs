@@ -114,6 +114,16 @@ fn categorize(name: &str) -> &'static str {
         || name == "get-val-query"
         || name == "execute-val-query"
         || name == "test-val-query"
+        || name == "list-val-linkages"
+        || name == "create-val-linkage"
+        || name == "update-val-linkage"
+        || name == "list-val-integrations"
+        || name == "list-val-integration-tables"
+        || name == "get-val-integration"
+        || name == "get-val-integration-fields"
+        || name == "save-val-integration"
+        || name == "test-val-integration"
+        || name == "extract-val-integration"
     {
         "VAL Admin"
     } else if name == "execute-val-sql" {
@@ -127,13 +137,14 @@ fn categorize(name: &str) -> &'static str {
         || name == "duplicate-val-dashboard"
     {
         "VAL Admin"
+    } else if name == "sync-val-domain" || name == "get-val-sync-status" {
+        "VAL Admin"
     } else if name == "list-val-drive-folders" || name == "create-val-drive-folder" {
         // Folder *structure* ops are VAL configuration, not data plane
         "VAL Admin"
     } else if name == "list-val-drive-files"
         || name == "check-val-drive-files-all-domains"
         || name == "check-val-drive-file-exists"
-        || name == "get-val-drive-file"
         || name == "rename-val-drive-file"
         || name == "move-val-drive-file"
     {
@@ -201,6 +212,8 @@ fn source_file_for(name: &str) -> &'static str {
         "VAL Drive" => "src/server/tools/val_drive.rs",
         "VAL Admin" if matches!(name, "list-val-drive-folders" | "create-val-drive-folder") =>
             "src/server/tools/val_drive.rs",
+        "VAL Admin" if matches!(name, "sync-val-domain" | "get-val-sync-status") =>
+            "src/server/tools/val_cross_sync.rs",
         "VAL SQL" => "src/server/tools/val_sync.rs",
         "Supabase SQL" => "src/server/tools/val_sync.rs",
         "VAL Admin" if matches!(name,

@@ -241,6 +241,9 @@ pub async fn val_api_request(
     };
 
     request = request.query(&[("uuid", "1"), ("token", token)]);
+    // Also send as `x-auth-token` header — some downstream services (e.g. the
+    // integration service) only read auth from the header, not the query param.
+    request = request.header("x-auth-token", token);
     for (k, v) in query {
         request = request.query(&[(k, v)]);
     }

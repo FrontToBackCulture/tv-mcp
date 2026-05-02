@@ -118,8 +118,23 @@ pub async fn get_space(domain: &str, space_id: &str) -> CmdResult<Value> {
     if space_id.trim().is_empty() {
         return Err(CommandError::Config("'space_id' cannot be empty".to_string()));
     }
-    let path = format!("/api/v1/spaces/{}/info", space_id);
-    get_json(domain, "get-val-space", &path).await
+    // The /api/v1/spaces/:id/info backend route is not gateway-proxied.
+    // Compose by listing all spaces and filtering client-side.
+    let needle: i64 = space_id.parse().map_err(|_| {
+        CommandError::Config(format!("'space_id' must be numeric (got '{}')", space_id))
+    })?;
+    let spaces = list_spaces(domain).await?;
+    if let Value::Array(arr) = spaces {
+        for sp in arr {
+            if sp.get("project_id").and_then(|v| v.as_i64()) == Some(needle) {
+                return Ok(sp);
+            }
+        }
+    }
+    Err(CommandError::Network(format!(
+        "Space {} not found in domain '{}'",
+        space_id, domain
+    )))
 }
 
 pub async fn list_space_zones(domain: &str, space_id: &str) -> CmdResult<Value> {
@@ -130,20 +145,28 @@ pub async fn list_space_zones(domain: &str, space_id: &str) -> CmdResult<Value> 
     get_json(domain, "list-val-space-zones", &path).await
 }
 
-pub async fn list_zones(domain: &str, filters: Option<Value>) -> CmdResult<Value> {
-    let mut query: Vec<(String, String)> = Vec::new();
-    if let Some(Value::Object(map)) = filters {
-        for (k, v) in map.into_iter() {
-            let s = match v {
-                Value::String(s) => s,
-                Value::Number(n) => n.to_string(),
-                Value::Bool(b) => b.to_string(),
-                _ => continue,
-            };
-            query.push((k, s));
+pub async fn list_zones(domain: &str, _filters: Option<Value>) -> CmdResult<Value> {
+    // The /api/v1/admin/zones backend route is not gateway-proxied.
+    // Compose by listing all spaces and concatenating zones from each.
+    // (The `filters` arg is currently a no-op — call sites should filter the
+    // returned array client-side until a server-side endpoint is exposed.)
+    let spaces = list_spaces(domain).await?;
+    let mut all_zones: Vec<Value> = Vec::new();
+    if let Value::Array(arr) = spaces {
+        for sp in arr {
+            if let Some(id) = sp.get("project_id").and_then(|v| v.as_i64()) {
+                let space_id = id.to_string();
+                if let Ok(zones) = list_space_zones(domain, &space_id).await {
+                    if let Value::Array(zone_arr) = zones {
+                        for z in zone_arr {
+                            all_zones.push(z);
+                        }
+                    }
+                }
+            }
         }
     }
-    get_json_with_query(domain, "list-val-zones", "/api/v1/admin/zones", query).await
+    Ok(Value::Array(all_zones))
 }
 
 pub async fn get_zone(domain: &str, zone_id: &str) -> CmdResult<Value> {
@@ -265,24 +288,63 @@ pub async fn get_table(domain: &str, table_id: &str) -> CmdResult<Value> {
     if table_id.trim().is_empty() {
         return Err(CommandError::Config("'table_id' cannot be empty".to_string()));
     }
-    let path = format!("/db/admin-repoType/getRepoTableDetails/{}", table_id);
-    get_json(domain, "get-val-table", &path).await
-}
-
-pub async fn list_tables(domain: &str, filters: Option<Value>) -> CmdResult<Value> {
-    let mut query: Vec<(String, String)> = Vec::new();
-    if let Some(Value::Object(map)) = filters {
-        for (k, v) in map.into_iter() {
-            let s = match v {
-                Value::String(s) => s,
-                Value::Number(n) => n.to_string(),
-                Value::Bool(b) => b.to_string(),
-                _ => continue,
-            };
-            query.push((k, s));
+    // /db/admin-repoType/getRepoTableDetails returns null in practice.
+    // Compose by scanning all tables across all spaces+zones, matching by
+    // tablename. Slow on large domains — call sites that already know the
+    // zone should prefer list-val-zone-tables and filter directly.
+    let needle = table_id.to_string();
+    let tables = list_tables(domain, None).await?;
+    if let Value::Array(arr) = tables {
+        for t in arr {
+            let tablename = t
+                .get("tablename")
+                .or_else(|| t.get("table_name"))
+                .or_else(|| t.get("table"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if tablename == needle {
+                return Ok(t);
+            }
         }
     }
-    get_json_with_query(domain, "list-val-tables", "/api/v1/admin/tables", query).await
+    Err(CommandError::Network(format!(
+        "Table '{}' not found in domain '{}'",
+        table_id, domain
+    )))
+}
+
+pub async fn list_tables(domain: &str, _filters: Option<Value>) -> CmdResult<Value> {
+    // The /api/v1/admin/tables backend route is not gateway-proxied.
+    // Compose by walking spaces → zones → zone-tables. Dedupe by tablename
+    // (a table can surface under multiple zones via phase_repo_tbl).
+    // (The `filters` arg is currently a no-op — call sites should filter
+    // the returned array client-side.)
+    let zones = list_zones(domain, None).await?;
+    let mut all_tables: Vec<Value> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if let Value::Array(zone_arr) = zones {
+        for z in zone_arr {
+            if let Some(zid) = z.get("phase_id").and_then(|v| v.as_i64()) {
+                let zone_id = zid.to_string();
+                if let Ok(zts) = list_zone_tables(domain, &zone_id).await {
+                    if let Value::Array(table_arr) = zts {
+                        for t in table_arr {
+                            let key = t
+                                .get("tablename")
+                                .or_else(|| t.get("table_name"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            if !key.is_empty() && seen.insert(key) {
+                                all_tables.push(t);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(Value::Array(all_tables))
 }
 
 pub async fn list_table_dependencies(domain: &str, table_id: &str) -> CmdResult<Value> {
@@ -343,9 +405,16 @@ pub async fn find_tables_with_field(domain: &str, filters: Value) -> CmdResult<V
             query.push((k, s));
         }
     }
-    if query.is_empty() {
+    // The val-services helper specifically reads `column_name` from the
+    // query string (queries information_schema.columns directly). Other
+    // keys are silently ignored upstream and result in an opaque HTTP 500
+    // "Err" — fail fast here with a clearer message.
+    if !query.iter().any(|(k, v)| k == "column_name" && !v.is_empty()) {
         return Err(CommandError::Config(
-            "'filters' must include at least one identifier (e.g. { name } or { id })".to_string(),
+            "'filters' must contain `column_name` (the physical column name, e.g. \
+             'usr_befebfbfcbbf0de'). Display names like 'Brand' will not match — use \
+             list-val-fields first to resolve display name → physical name."
+                .to_string(),
         ));
     }
     get_json_with_query(
@@ -650,4 +719,183 @@ pub async fn clone_table(
         }
     });
     post_json(domain, "clone-val-table", "/db/admin-repoTable/cloneTable", body).await
+}
+
+// ============================================================================
+// Linkages — connect two existing fields across tables
+// ============================================================================
+
+pub async fn list_linkages(domain: &str) -> CmdResult<Value> {
+    get_json(domain, "list-val-linkages", "/db/admin-repoType/getLinkages/").await
+}
+
+pub async fn create_linkage(domain: &str, linkage: Value) -> CmdResult<Value> {
+    if !linkage.is_object() {
+        return Err(CommandError::Config(
+            "'linkage' must be an object".to_string(),
+        ));
+    }
+    let required = [
+        "repo_source_name",
+        "repo_source_col",
+        "repo_assoc_name",
+        "repo_assoc_col",
+        "source_zone_id",
+        "target_zone_id",
+    ];
+    if let Some(obj) = linkage.as_object() {
+        for k in required {
+            if !obj.contains_key(k) {
+                return Err(CommandError::Config(format!(
+                    "'linkage.{}' is required",
+                    k
+                )));
+            }
+        }
+    }
+    let body = json!({ "linkage": linkage });
+    post_json(domain, "create-val-linkage", "/db/admin-repoType/addLinkage", body).await
+}
+
+pub async fn update_linkage(domain: &str, linkage: Value) -> CmdResult<Value> {
+    if !linkage.is_object() {
+        return Err(CommandError::Config(
+            "'linkage' must be an object".to_string(),
+        ));
+    }
+    // updateLinkage handler also requires source_zone_id + target_zone_id for
+    // the permission check, plus an `id` to identify which linkage to update.
+    let required = ["id", "source_zone_id", "target_zone_id"];
+    if let Some(obj) = linkage.as_object() {
+        for k in required {
+            if !obj.contains_key(k) {
+                return Err(CommandError::Config(format!(
+                    "'linkage.{}' is required",
+                    k
+                )));
+            }
+        }
+    }
+    let body = json!({ "linkage": linkage });
+    post_json(domain, "update-val-linkage", "/db/admin-repoType/updateLinkage", body).await
+}
+
+// ============================================================================
+// Integrations — connector configurations and integration-backed tables
+// ============================================================================
+
+pub async fn list_integrations(domain: &str) -> CmdResult<Value> {
+    get_json(domain, "list-val-integrations", "/db/integration/listAllIntegrations").await
+}
+
+pub async fn list_integration_tables(domain: &str) -> CmdResult<Value> {
+    get_json(
+        domain,
+        "list-val-integration-tables",
+        "/db/integration/listAllIntegrationsTable",
+    )
+    .await
+}
+
+pub async fn get_integration(domain: &str, identifier: &str) -> CmdResult<Value> {
+    if identifier.trim().is_empty() {
+        return Err(CommandError::Config("'identifier' cannot be empty".to_string()));
+    }
+    let path = format!("/db/integration/{}", identifier);
+    get_json(domain, "get-val-integration", &path).await
+}
+
+pub async fn get_integration_fields(
+    domain: &str,
+    filters: Option<Value>,
+) -> CmdResult<Value> {
+    let mut query: Vec<(String, String)> = Vec::new();
+    if let Some(Value::Object(map)) = filters {
+        for (k, v) in map.into_iter() {
+            let s = match v {
+                Value::String(s) => s,
+                Value::Number(n) => n.to_string(),
+                Value::Bool(b) => b.to_string(),
+                _ => continue,
+            };
+            query.push((k, s));
+        }
+    }
+    // The val-services gateway substitutes both `identifier` and `optionId`
+    // into the URL path: `${integrationHost}/${identifier}/options/${optionId}/fields`.
+    // Without either, the URL contains `undefined` and the integration
+    // service responds with an opaque HTTP 500 — fail fast here.
+    let has = |name: &str| query.iter().any(|(k, v)| k == name && !v.is_empty());
+    if !has("identifier") || !has("optionId") {
+        return Err(CommandError::Config(
+            "'filters' must contain both `identifier` (connector slug, e.g. 'dineconnect') \
+             and `optionId` (a connector-specific option id like 'transactions' or 'menus'). \
+             Option ids come from the connector's manifest; if you don't know them, inspect \
+             the connector's options endpoint via the val-services UI or call \
+             /db/integration/getIntegrationOptions/<identifier> directly. The connector must \
+             also be `authenticated: true` (check via list-val-integrations) — unauthenticated \
+             connectors will fail upstream."
+                .to_string(),
+        ));
+    }
+    get_json_with_query(
+        domain,
+        "get-val-integration-fields",
+        "/db/integration/getIntegrationFields",
+        query,
+    )
+    .await
+}
+
+pub async fn save_integration(domain: &str, settings: Value) -> CmdResult<Value> {
+    if !settings.is_object() {
+        return Err(CommandError::Config(
+            "'settings' must be an object".to_string(),
+        ));
+    }
+    // val-services reads body.settings.info.id for the table-permission check,
+    // so the payload must be `{ settings: { info: { id, ... }, ... } }`.
+    if settings
+        .get("info")
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().is_empty())
+        .unwrap_or(true)
+    {
+        return Err(CommandError::Config(
+            "'settings.info.id' (target table id) is required".to_string(),
+        ));
+    }
+    let body = json!({ "settings": settings });
+    post_json(
+        domain,
+        "save-val-integration",
+        "/db/integration/saveIntegration",
+        body,
+    )
+    .await
+}
+
+pub async fn test_integration(domain: &str, body: Value) -> CmdResult<Value> {
+    if !body.is_object() {
+        return Err(CommandError::Config(
+            "'body' must be an object — typically { settings, payload } depending on connector".to_string(),
+        ));
+    }
+    post_json(domain, "test-val-integration", "/db/integration/test", body).await
+}
+
+pub async fn extract_integration(domain: &str, body: Value) -> CmdResult<Value> {
+    if !body.is_object() {
+        return Err(CommandError::Config(
+            "'body' must be an object identifying the integration to extract".to_string(),
+        ));
+    }
+    post_json(
+        domain,
+        "extract-val-integration",
+        "/db/integration/extractIntegration",
+        body,
+    )
+    .await
 }

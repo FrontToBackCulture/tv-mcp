@@ -9,6 +9,7 @@ pub mod intercom;
 pub mod docgen;
 pub mod dashboards;
 pub mod val_admin;
+pub mod val_cross_sync;
 pub mod val_drive;
 pub mod val_sync;
 pub mod workflows;
@@ -62,6 +63,9 @@ pub fn list_tools() -> Vec<Tool> {
 
     // VAL Dashboards
     tools.extend(dashboards::tools());
+
+    // VAL Cross-Domain Sync (lab → other)
+    tools.extend(val_cross_sync::tools());
 
     // Discussion tools
     tools.extend(discussions::tools());
@@ -158,7 +162,7 @@ pub async fn call_tool(name: &str, arguments: Value) -> ToolResult {
     // VAL Drive tools
     if name == "list-val-drive-folders" || name == "list-val-drive-files"
         || name == "check-val-drive-files-all-domains" || name == "check-val-drive-file-exists"
-        || name == "get-val-drive-file" || name == "create-val-drive-folder"
+        || name == "create-val-drive-folder"
         || name == "rename-val-drive-file" || name == "move-val-drive-file" {
         return val_drive::call(name, arguments).await;
     }
@@ -168,6 +172,11 @@ pub async fn call_tool(name: &str, arguments: Value) -> ToolResult {
         || name == "create-val-dashboard" || name == "update-val-dashboard"
         || name == "duplicate-val-dashboard" {
         return dashboards::call(name, arguments).await;
+    }
+
+    // VAL Cross-Domain Sync
+    if name == "sync-val-domain" || name == "get-val-sync-status" {
+        return val_cross_sync::call(name, arguments).await;
     }
 
     // Workflow authoring tools
@@ -196,7 +205,13 @@ pub async fn call_tool(name: &str, arguments: Value) -> ToolResult {
         || name == "create-val-query" || name == "update-val-query"
         || name == "copy-val-query"
         || name == "list-val-queries" || name == "get-val-query"
-        || name == "execute-val-query" || name == "test-val-query" {
+        || name == "execute-val-query" || name == "test-val-query"
+        || name == "list-val-linkages" || name == "create-val-linkage"
+        || name == "update-val-linkage"
+        || name == "list-val-integrations" || name == "list-val-integration-tables"
+        || name == "get-val-integration" || name == "get-val-integration-fields"
+        || name == "save-val-integration" || name == "test-val-integration"
+        || name == "extract-val-integration" {
         return val_admin::call(name, arguments).await;
     }
 

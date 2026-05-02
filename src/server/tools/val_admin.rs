@@ -339,17 +339,26 @@ pub fn tools() -> Vec<Tool> {
         Tool {
             name: "find-val-tables-with-field".to_string(),
             description:
-                "Reverse lookup — list every table that has a field matching the given filter. \
-                 Use before renaming or restructuring a column to surface every table affected. \
-                 `filters` must include at least one identifier (e.g. `{ name }` or `{ id }`); \
-                 keys are passed through to the returnTablesWithField helper."
+                "Reverse lookup — list every table that has the given physical column. Use before \
+                 renaming or restructuring a column to surface every table affected. \
+                 \
+                 `filters` MUST contain `column_name` set to the *physical* column name (e.g. \
+                 `usr_befebfbfcbbf0de`, `pgad7e98...`, `bco1234...`), NOT the display name. The \
+                 helper queries Postgres `information_schema.columns` directly, so display \
+                 names like 'Brand' will not match. To go from display name → physical name, \
+                 first call `list-val-fields` and look up the field's `column_name` (or \
+                 `dft_nodefields_name`). \
+                 \
+                 Returns an array of table records (id, name, tablename, spaces, zones, etc.) \
+                 — same shape as `list-val-tables` entries. May be very large (172+ tables in \
+                 lab for a common column)."
                     .to_string(),
             input_schema: InputSchema::with_properties(
                 json!({
                     "domain": { "type": "string", "description": "VAL domain name" },
                     "filters": {
                         "type": "object",
-                        "description": "Required. Flat key→string|number|bool map. At minimum include `name` or `id`."
+                        "description": "Required. Must include `column_name` set to the physical column name (e.g. usr_befebfbfcbbf0de). Display names (e.g. 'Brand') will NOT match — use list-val-fields to resolve display→physical first."
                     }
                 }),
                 vec!["domain".to_string(), "filters".to_string()],
@@ -359,12 +368,34 @@ pub fn tools() -> Vec<Tool> {
             name: "add-val-table-field".to_string(),
             description:
                 "Add a single new field (column) to a VAL table. \
-                 `data_type` accepts: 'text', 'number', 'decimal', 'date', 'boolean', 'checkbox', \
-                 'select', 'chips', 'person', 'multiperson', 'attachment', 'url', \
-                 'linked_text', 'linked_select', 'linked_multiselect'. \
-                 For linked types, pass `link_options` with `linked_table`, `linked_field`, etc. \
-                 Use `extras` for optional metadata: `desc`, `category`, `column_length`, `colour`, \
-                 `predefined_values`, `applyOnTableLevel`, `allowedValuesOnly`."
+                 \
+                 `data_type` is one of the 19 platform FIELD_TYPES (source: \
+                 val-react/src/components/repository/SelectFieldType.tsx). \
+                 \
+                 PRIMITIVES: 'text', 'int' (Number), 'numeric' (Decimal), 'bool' (Checkbox), \
+                 'date', 'timestamp' (Date With Time), 'url'. \
+                 SELECTS: 'select' (editable), 'select_controlled' (locked options), 'chips' \
+                 (multi editable), 'chips_controlled' (multi locked). \
+                 PEOPLE: 'person' (single user), 'multiperson' (user array). \
+                 ATTACHMENTS: 'attachment'. \
+                 LINKED: 'linked_select' (single ref), 'linked_multiselect' (ref array). \
+                 CALCULATED (NOT supported here — these live in admin_ui_settings, not \
+                 dft_nodefields_tbl): 'formula', 'rollupv2', 'rules'. \
+                 \
+                 Decision tree for required `extras` / `link_options`: \
+                 • If `data_type` is a SELECT family → set `extras.predefined_values` to an \
+                   array of {label, value, color?}. \
+                 • If `data_type` is `linked_select` or `linked_multiselect` → set \
+                   `link_options` with: `linked_table` (target table id), `linked_field` \
+                   (target column), `source_field_display`, `existing_field`, \
+                   `linked_field_display`, `table_display_name`. \
+                 • Otherwise `extras` is fully optional. Common keys: `desc`, `category`, \
+                   `column_length` (for varchar caps), `colour` (UI badge hex), \
+                   `applyOnTableLevel`, `allowedValuesOnly`. \
+                 \
+                 For full type semantics, dropdown-option storage, linkage cardinality, the \
+                 usr_<hash> physical naming, and worked examples — fetch \
+                 `concepts/fields` via `get-docs-page`."
                     .to_string(),
             input_schema: InputSchema::with_properties(
                 json!({
@@ -376,15 +407,22 @@ pub fn tools() -> Vec<Tool> {
                     "name": { "type": "string", "description": "Field display name" },
                     "data_type": {
                         "type": "string",
-                        "description": "VAL data type — see tool description for full list"
+                        "description": "Platform FIELD_TYPES value. Primitives: text, int, numeric, bool, date, timestamp, url. Selects: select, select_controlled, chips, chips_controlled. People: person, multiperson. Attachments: attachment. Linked: linked_select, linked_multiselect.",
+                        "enum": [
+                            "text", "int", "numeric", "bool", "date", "timestamp", "url",
+                            "select", "select_controlled", "chips", "chips_controlled",
+                            "person", "multiperson",
+                            "attachment",
+                            "linked_select", "linked_multiselect"
+                        ]
                     },
                     "extras": {
                         "type": "object",
-                        "description": "Optional metadata merged into the request body"
+                        "description": "Optional metadata. For select/chips families, include `predefined_values: [{label, value, color?}]`. Other keys: desc, category, column_length, colour, applyOnTableLevel, allowedValuesOnly."
                     },
                     "link_options": {
                         "type": "object",
-                        "description": "Required only for linked_* data_types. Keys: linked_table, source_field_display, existing_field, linked_field, linked_field_display, table_display_name."
+                        "description": "Required only for linked_select / linked_multiselect. Keys: linked_table, source_field_display, existing_field, linked_field, linked_field_display, table_display_name."
                     }
                 }),
                 vec![
@@ -635,6 +673,196 @@ pub fn tools() -> Vec<Tool> {
                     "new_name".to_string(),
                     "source_datasource".to_string(),
                 ],
+            ),
+        },
+        Tool {
+            name: "list-val-linkages".to_string(),
+            description:
+                "List every linkage (cross-table relationship) defined in a VAL domain. Each \
+                 linkage joins a source field to a target field — analogous to a foreign key. \
+                 Response includes phase + project context for each linkage. Use to discover \
+                 linkage IDs before `update-val-linkage`."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" }
+                }),
+                vec!["domain".to_string()],
+            ),
+        },
+        Tool {
+            name: "create-val-linkage".to_string(),
+            description:
+                "Create a linkage between two existing fields across tables. Different from \
+                 `add-val-table-field` with `linked_*` data_type — that creates a NEW linked \
+                 field; this connects two EXISTING fields. \
+                 \
+                 `linkage` must include: `repo_source_name` (source table id, e.g., \
+                 'custom_tbl_<zone>_<seq>'), `repo_source_col` (source field column_name), \
+                 `repo_assoc_name` (target table id), `repo_assoc_col` (target field \
+                 column_name), `source_zone_id`, `target_zone_id`. Optional: \
+                 `repo_source_display_col`, `repo_assoc_display_col`, `source_space`, \
+                 `target_space`."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "linkage": {
+                        "type": "object",
+                        "description": "Linkage payload — see tool description for required keys."
+                    }
+                }),
+                vec!["domain".to_string(), "linkage".to_string()],
+            ),
+        },
+        Tool {
+            name: "update-val-linkage".to_string(),
+            description:
+                "Update an existing linkage. `linkage` must include `id` (linkage row id), plus \
+                 `source_zone_id` and `target_zone_id` (used for the permission check), plus the \
+                 fields to change."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "linkage": {
+                        "type": "object",
+                        "description": "Linkage update payload — must include id, source_zone_id, target_zone_id."
+                    }
+                }),
+                vec!["domain".to_string(), "linkage".to_string()],
+            ),
+        },
+        Tool {
+            name: "list-val-integrations".to_string(),
+            description:
+                "List the integration connector types available on a VAL domain (Shopify, Xero, \
+                 etc.). Use to discover what connectors can be wired up before \
+                 `save-val-integration`."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" }
+                }),
+                vec!["domain".to_string()],
+            ),
+        },
+        Tool {
+            name: "list-val-integration-tables".to_string(),
+            description:
+                "List every integration-backed table in a VAL domain — tables that get \
+                 auto-populated from a connector. Use to find existing integration setups."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" }
+                }),
+                vec!["domain".to_string()],
+            ),
+        },
+        Tool {
+            name: "get-val-integration".to_string(),
+            description:
+                "Fetch one integration's full config — connector type, table mapping, field \
+                 mappings, filter rules. Use before `save-val-integration` to see current state."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "identifier": {
+                        "type": "string",
+                        "description": "Integration identifier (e.g. connector slug or instance id)."
+                    }
+                }),
+                vec!["domain".to_string(), "identifier".to_string()],
+            ),
+        },
+        Tool {
+            name: "get-val-integration-fields".to_string(),
+            description:
+                "List the fields a given integration connector can extract for a specific \
+                 option (e.g. 'transactions', 'menus'). Use during setup to plan field \
+                 mappings before `save-val-integration`. \
+                 \
+                 `filters` MUST contain both `identifier` (connector slug, e.g. 'dineconnect') \
+                 and `optionId` (a connector-specific option id). The val-services gateway \
+                 substitutes both into the URL path: \
+                 `${integrationHost}/${identifier}/options/${optionId}/fields`. Without \
+                 either, the URL contains `undefined` and the integration service responds \
+                 with an opaque HTTP 500. \
+                 \
+                 The connector must also be `authenticated: true` (check via \
+                 `list-val-integrations`) — unauthenticated connectors return upstream errors. \
+                 Optional extras: `shortcode`, `values` (JSON-stringified prior selections), \
+                 `id`."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "filters": {
+                        "type": "object",
+                        "description": "Required. Must include `identifier` (connector slug) and `optionId` (a connector option id). Optional extras: shortcode, values, id."
+                    }
+                }),
+                vec!["domain".to_string(), "filters".to_string()],
+            ),
+        },
+        Tool {
+            name: "save-val-integration".to_string(),
+            description:
+                "Save an integration table config — wires a connector to a target VAL table with \
+                 field mappings. `settings` is the full integration payload (server reads \
+                 `settings.info.id` as the target table id for permission checks). Common shape: \
+                 `{ info: { id, ... }, mappings: [...], filters: [...], schedule: {...} }`. \
+                 Fetch via `get-val-integration` first when updating an existing one."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "settings": {
+                        "type": "object",
+                        "description": "Full integration config. Must include `info.id` (target table id)."
+                    }
+                }),
+                vec!["domain".to_string(), "settings".to_string()],
+            ),
+        },
+        Tool {
+            name: "test-val-integration".to_string(),
+            description:
+                "Pre-flight test of a connector configuration — verifies auth + that the \
+                 mappings produce a sensible row sample without persisting. Run before \
+                 `extract-val-integration` to catch misconfiguration. Body shape mirrors \
+                 `save-val-integration` payload."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "body": {
+                        "type": "object",
+                        "description": "Test payload — typically the same shape as save-val-integration's settings."
+                    }
+                }),
+                vec!["domain".to_string(), "body".to_string()],
+            ),
+        },
+        Tool {
+            name: "extract-val-integration".to_string(),
+            description:
+                "Trigger a data extraction from a configured integration — pulls rows from the \
+                 connector into the target VAL table. `body` identifies which integration to \
+                 run; typical shape `{ identifier, optionId, table, ... }`. For scheduled \
+                 connectors, this is a manual one-off run on top of the schedule."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "body": {
+                        "type": "object",
+                        "description": "Extraction payload identifying the integration."
+                    }
+                }),
+                vec!["domain".to_string(), "body".to_string()],
             ),
         },
         Tool {
@@ -1031,6 +1259,110 @@ pub async fn call(name: &str, args: Value) -> ToolResult {
             match val_admin::copy_query(&domain, &new_name, source_datasource, extras).await {
                 Ok(v) => ToolResult::json(&v),
                 Err(e) => ToolResult::error(format!("copy-val-query failed: {}", e)),
+            }
+        }
+
+        "list-val-linkages" => {
+            let domain = require_str!(args, "domain");
+            match val_admin::list_linkages(&domain).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("list-val-linkages failed: {}", e)),
+            }
+        }
+
+        "create-val-linkage" => {
+            let domain = require_str!(args, "domain");
+            let linkage = match args.get("linkage") {
+                Some(v) if v.is_object() => v.clone(),
+                _ => return ToolResult::error("'linkage' must be an object".to_string()),
+            };
+            match val_admin::create_linkage(&domain, linkage).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("create-val-linkage failed: {}", e)),
+            }
+        }
+
+        "update-val-linkage" => {
+            let domain = require_str!(args, "domain");
+            let linkage = match args.get("linkage") {
+                Some(v) if v.is_object() => v.clone(),
+                _ => return ToolResult::error("'linkage' must be an object".to_string()),
+            };
+            match val_admin::update_linkage(&domain, linkage).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("update-val-linkage failed: {}", e)),
+            }
+        }
+
+        "list-val-integrations" => {
+            let domain = require_str!(args, "domain");
+            match val_admin::list_integrations(&domain).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("list-val-integrations failed: {}", e)),
+            }
+        }
+
+        "list-val-integration-tables" => {
+            let domain = require_str!(args, "domain");
+            match val_admin::list_integration_tables(&domain).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("list-val-integration-tables failed: {}", e)),
+            }
+        }
+
+        "get-val-integration" => {
+            let domain = require_str!(args, "domain");
+            let identifier = require_str!(args, "identifier");
+            match val_admin::get_integration(&domain, &identifier).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("get-val-integration failed: {}", e)),
+            }
+        }
+
+        "get-val-integration-fields" => {
+            let domain = require_str!(args, "domain");
+            let filters = args.get("filters").and_then(|v| {
+                if v.is_object() { Some(v.clone()) } else { None }
+            });
+            match val_admin::get_integration_fields(&domain, filters).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("get-val-integration-fields failed: {}", e)),
+            }
+        }
+
+        "save-val-integration" => {
+            let domain = require_str!(args, "domain");
+            let settings = match args.get("settings") {
+                Some(v) if v.is_object() => v.clone(),
+                _ => return ToolResult::error("'settings' must be an object".to_string()),
+            };
+            match val_admin::save_integration(&domain, settings).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("save-val-integration failed: {}", e)),
+            }
+        }
+
+        "test-val-integration" => {
+            let domain = require_str!(args, "domain");
+            let body = match args.get("body") {
+                Some(v) if v.is_object() => v.clone(),
+                _ => return ToolResult::error("'body' must be an object".to_string()),
+            };
+            match val_admin::test_integration(&domain, body).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("test-val-integration failed: {}", e)),
+            }
+        }
+
+        "extract-val-integration" => {
+            let domain = require_str!(args, "domain");
+            let body = match args.get("body") {
+                Some(v) if v.is_object() => v.clone(),
+                _ => return ToolResult::error("'body' must be an object".to_string()),
+            };
+            match val_admin::extract_integration(&domain, body).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("extract-val-integration failed: {}", e)),
             }
         }
 

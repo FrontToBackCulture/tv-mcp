@@ -113,19 +113,6 @@ async fn drive_request(
     serde_json::from_slice(&bytes).map_err(|e| CommandError::Network(format!("parse: {}", e)))
 }
 
-pub async fn val_drive_get_file(
-    domain: String,
-    file_id: String,
-) -> CmdResult<serde_json::Value> {
-    if file_id.trim().is_empty() {
-        return Err(CommandError::Config("'file_id' cannot be empty".to_string()));
-    }
-    let path = format!(
-        "/api/v1/val_drive/files/{}",
-        urlencoding::encode(&file_id)
-    );
-    drive_request(&domain, reqwest::Method::GET, &path, vec![], None).await
-}
 
 pub async fn val_drive_check_file_exists(
     domain: String,
