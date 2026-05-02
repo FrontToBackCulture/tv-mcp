@@ -84,15 +84,66 @@ pub async fn get_dashboard(domain: &str, id: &str) -> CmdResult<Value> {
     get_json_with_query(domain, "get-val-dashboard", &path, vec![]).await
 }
 
-/// `dashboard` is the full saveDashboard payload — for create, omit `id` (or set it null).
+/// Create a new dashboard. Two-step flow:
+///   1) GET /db/dashboard/v1/createDashboard?name=...&category=... → server assigns id
+///   2) If `dashboard.widgets` or `dashboard.settings` is provided, follow up with
+///      saveDashboard to populate the layout.
+///
+/// `dashboard` may include: `name` (required), `category`, `widgets`, `settings`,
+/// `permission`. `id` is ignored on create — the server assigns it.
 pub async fn create_dashboard(domain: &str, dashboard: Value) -> CmdResult<Value> {
-    if !dashboard.is_object() {
-        return Err(CommandError::Config(
-            "'dashboard' must be an object — full saveDashboard payload (basicInfo, dashboardInfo, etc.).".to_string(),
-        ));
+    let obj = dashboard.as_object().ok_or_else(|| {
+        CommandError::Config(
+            "'dashboard' must be an object with at least { name }".to_string(),
+        )
+    })?;
+    let name = obj
+        .get("name")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| CommandError::Config("'dashboard.name' is required".to_string()))?
+        .to_string();
+    let category = obj
+        .get("category")
+        .and_then(|v| v.as_str())
+        .unwrap_or("private")
+        .to_string();
+
+    let create_query = vec![
+        ("name".to_string(), name.clone()),
+        ("category".to_string(), category.clone()),
+    ];
+    let created = get_json_with_query(
+        domain,
+        "create-val-dashboard",
+        "/db/dashboard/v1/createDashboard",
+        create_query,
+    )
+    .await?;
+
+    let new_id = created
+        .get("id")
+        .and_then(|v| v.as_i64().map(|n| n.to_string()).or_else(|| v.as_str().map(|s| s.to_string())))
+        .ok_or_else(|| {
+            CommandError::Internal("createDashboard did not return an id".to_string())
+        })?;
+
+    let has_layout = obj.get("widgets").is_some()
+        || obj.get("settings").is_some()
+        || obj.get("permission").is_some();
+    if !has_layout {
+        return Ok(created);
     }
-    let body = json!({ "dashboard": dashboard });
-    post_json(domain, "create-val-dashboard", "/db/dashboard/v1/saveDashboard", body).await
+
+    // Populate layout via saveDashboard.
+    let mut save_body = obj.clone();
+    save_body.insert("id".to_string(), Value::String(new_id.clone()));
+    save_body.insert("name".to_string(), Value::String(name));
+    save_body.insert("category".to_string(), Value::String(category));
+    let body = json!({ "dashboard": Value::Object(save_body) });
+    post_json(domain, "create-val-dashboard", "/db/dashboard/v1/saveDashboard", body).await?;
+
+    Ok(created)
 }
 
 /// Update existing dashboard. saveDashboard does a full INSERT/UPDATE keyed by id —
@@ -122,11 +173,13 @@ pub async fn duplicate_dashboard(
     if source_id.trim().is_empty() {
         return Err(CommandError::Config("'source_id' cannot be empty".to_string()));
     }
-    let mut body_obj = serde_json::Map::new();
-    body_obj.insert("id".to_string(), Value::String(source_id.to_string()));
-    if let Some(n) = new_name {
-        body_obj.insert("name".to_string(), Value::String(n.to_string()));
-    }
-    let body = json!({ "dashboard": Value::Object(body_obj) });
+    let name = new_name
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| format!("Copy of dashboard {}", source_id));
+
+    // Handler validates body.id + body.name directly — NOT body.dashboard.id.
+    let body = json!({ "id": source_id, "name": name });
     post_json(domain, "duplicate-val-dashboard", "/db/dashboard/v1/duplicateDashboard", body).await
 }

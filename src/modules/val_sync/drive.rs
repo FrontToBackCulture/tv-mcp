@@ -135,39 +135,94 @@ pub async fn val_drive_check_file_exists(
 pub async fn val_drive_create_folder(
     domain: String,
     parent_folder_id: String,
-    body: serde_json::Value,
+    name: String,
 ) -> CmdResult<serde_json::Value> {
     if parent_folder_id.trim().is_empty() {
         return Err(CommandError::Config(
             "'parent_folder_id' cannot be empty".to_string(),
         ));
     }
+    if name.trim().is_empty() {
+        return Err(CommandError::Config("'name' cannot be empty".to_string()));
+    }
     let path = format!(
         "/api/v1/val_drive/folders/{}",
         urlencoding::encode(&parent_folder_id)
     );
+    // val-services handler reads body.folderName.
+    let body = serde_json::json!({ "folderName": name });
     drive_request(&domain, reqwest::Method::POST, &path, vec![], Some(body)).await
 }
 
 pub async fn val_drive_rename_file(
     domain: String,
-    file_id: String,
-    body: serde_json::Value,
+    parent_folder_id: String,
+    file_name: String,
+    new_name: String,
 ) -> CmdResult<serde_json::Value> {
-    if file_id.trim().is_empty() {
-        return Err(CommandError::Config("'file_id' cannot be empty".to_string()));
+    if parent_folder_id.trim().is_empty() {
+        return Err(CommandError::Config("'parent_folder_id' cannot be empty".to_string()));
     }
+    if file_name.trim().is_empty() {
+        return Err(CommandError::Config("'file_name' cannot be empty".to_string()));
+    }
+    if new_name.trim().is_empty() {
+        return Err(CommandError::Config("'new_name' cannot be empty".to_string()));
+    }
+    // Handler reads body.newValue + query.id (parent path used to derive folder)
+    // + params.fileId (leaf name).
     let path = format!(
         "/api/v1/val_drive/files/rename/{}",
-        urlencoding::encode(&file_id)
+        urlencoding::encode(&file_name)
     );
-    drive_request(&domain, reqwest::Method::POST, &path, vec![], Some(body)).await
+    let id_query = format!("{}/{}", parent_folder_id.trim_end_matches('/'), file_name);
+    let body = serde_json::json!({ "newValue": new_name });
+    drive_request(
+        &domain,
+        reqwest::Method::POST,
+        &path,
+        vec![("id".to_string(), id_query)],
+        Some(body),
+    )
+    .await
 }
 
 pub async fn val_drive_move_file(
     domain: String,
-    body: serde_json::Value,
+    source_parent: String,
+    source_name: String,
+    target_parent: String,
+    item_type: String,
 ) -> CmdResult<serde_json::Value> {
+    if source_parent.trim().is_empty() {
+        return Err(CommandError::Config("'source_parent' cannot be empty".to_string()));
+    }
+    if source_name.trim().is_empty() {
+        return Err(CommandError::Config("'source_name' cannot be empty".to_string()));
+    }
+    if target_parent.trim().is_empty() {
+        return Err(CommandError::Config("'target_parent' cannot be empty".to_string()));
+    }
+    if item_type != "file" && item_type != "folder" {
+        return Err(CommandError::Config(
+            "'type' must be 'file' or 'folder'".to_string(),
+        ));
+    }
+    // Server adds the `val_drive/` prefix; trim it if the caller included it.
+    let strip_prefix = |p: &str| {
+        p.trim_start_matches('/')
+            .strip_prefix("val_drive/")
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| p.trim_start_matches('/').to_string())
+    };
+    let body = serde_json::json!({
+        "items": [{
+            "id": source_name,
+            "path": strip_prefix(&source_parent),
+            "type": item_type,
+        }],
+        "targetFolder": strip_prefix(&target_parent),
+    });
     drive_request(
         &domain,
         reqwest::Method::POST,

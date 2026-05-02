@@ -91,67 +91,93 @@ pub fn tools() -> Vec<Tool> {
         Tool {
             name: "create-val-drive-folder".to_string(),
             description:
-                "Create a new subfolder under an existing Drive folder. `body` is passed through \
-                 to val-services — at minimum supply `{ name: '<folder name>' }`."
+                "Create a new subfolder under an existing Drive folder. Provide the parent path \
+                 and the new folder's name; tv-mcp constructs the val-services request shape."
                     .to_string(),
             input_schema: InputSchema::with_properties(
                 json!({
                     "domain": { "type": "string", "description": "VAL domain name" },
                     "parent_folder_id": {
                         "type": "string",
-                        "description": "Parent folder id/path (e.g., 'val_drive/RevRec')."
+                        "description": "Parent folder path (e.g., 'val_drive' or 'val_drive/RevRec')."
                     },
-                    "body": {
-                        "type": "object",
-                        "description": "Folder creation payload — at minimum `{ name }`."
+                    "name": {
+                        "type": "string",
+                        "description": "New folder name (leaf, not a path)."
                     }
                 }),
                 vec![
                     "domain".to_string(),
                     "parent_folder_id".to_string(),
-                    "body".to_string(),
+                    "name".to_string(),
                 ],
             ),
         },
         Tool {
             name: "rename-val-drive-file".to_string(),
             description:
-                "Rename a Drive file. `body` is passed through to val-services — at minimum \
-                 supply `{ name: '<new name>' }`. Does not move the file across folders — use \
-                 `move-val-drive-file` for that."
+                "Rename a Drive file in place. Does not move across folders — use \
+                 `move-val-drive-file` for that. Provide the parent folder path, the current file \
+                 name, and the new name."
                     .to_string(),
             input_schema: InputSchema::with_properties(
                 json!({
                     "domain": { "type": "string", "description": "VAL domain name" },
-                    "file_id": { "type": "string", "description": "Drive file id" },
-                    "body": {
-                        "type": "object",
-                        "description": "Rename payload — at minimum `{ name }`."
+                    "parent_folder_id": {
+                        "type": "string",
+                        "description": "Parent folder path (e.g., 'val_drive/RevRec/01_SourceReports')."
+                    },
+                    "file_name": {
+                        "type": "string",
+                        "description": "Current file name (leaf, not a full path)."
+                    },
+                    "new_name": {
+                        "type": "string",
+                        "description": "New file name."
                     }
                 }),
                 vec![
                     "domain".to_string(),
-                    "file_id".to_string(),
-                    "body".to_string(),
+                    "parent_folder_id".to_string(),
+                    "file_name".to_string(),
+                    "new_name".to_string(),
                 ],
             ),
         },
         Tool {
             name: "move-val-drive-file".to_string(),
             description:
-                "Move a Drive file to another folder. `body` is passed through to val-services — \
-                 typical shape `{ source: '<file id>', destination: '<folder id>' }`. Operational \
-                 reorg use case."
+                "Move a Drive file or folder into another folder. Paths can be given with or \
+                 without the `val_drive/` prefix — val-services adds it automatically."
                     .to_string(),
             input_schema: InputSchema::with_properties(
                 json!({
                     "domain": { "type": "string", "description": "VAL domain name" },
-                    "body": {
-                        "type": "object",
-                        "description": "Move payload — typically `{ source, destination }`."
+                    "source_parent": {
+                        "type": "string",
+                        "description": "Parent folder of the source (e.g., 'val_drive/RevRec/01_SourceReports' or just 'RevRec/01_SourceReports')."
+                    },
+                    "source_name": {
+                        "type": "string",
+                        "description": "Source file or folder name (leaf)."
+                    },
+                    "target_parent": {
+                        "type": "string",
+                        "description": "Destination folder path (e.g., 'val_drive/Archive' or 'Archive')."
+                    },
+                    "type": {
+                        "type": "string",
+                        "enum": ["file", "folder"],
+                        "description": "Whether the source is a 'file' or 'folder'."
                     }
                 }),
-                vec!["domain".to_string(), "body".to_string()],
+                vec![
+                    "domain".to_string(),
+                    "source_parent".to_string(),
+                    "source_name".to_string(),
+                    "target_parent".to_string(),
+                    "type".to_string(),
+                ],
             ),
         },
     ]
@@ -197,11 +223,8 @@ pub async fn call(name: &str, args: Value) -> ToolResult {
         "create-val-drive-folder" => {
             let domain = require_str!(args, "domain");
             let parent = require_str!(args, "parent_folder_id");
-            let body = match args.get("body") {
-                Some(v) if v.is_object() => v.clone(),
-                _ => return ToolResult::error("'body' must be an object".to_string()),
-            };
-            match drive::val_drive_create_folder(domain, parent, body).await {
+            let name = require_str!(args, "name");
+            match drive::val_drive_create_folder(domain, parent, name).await {
                 Ok(v) => ToolResult::json(&v),
                 Err(e) => ToolResult::error(format!("create-val-drive-folder failed: {}", e)),
             }
@@ -209,12 +232,10 @@ pub async fn call(name: &str, args: Value) -> ToolResult {
 
         "rename-val-drive-file" => {
             let domain = require_str!(args, "domain");
-            let file_id = require_str!(args, "file_id");
-            let body = match args.get("body") {
-                Some(v) if v.is_object() => v.clone(),
-                _ => return ToolResult::error("'body' must be an object".to_string()),
-            };
-            match drive::val_drive_rename_file(domain, file_id, body).await {
+            let parent = require_str!(args, "parent_folder_id");
+            let file_name = require_str!(args, "file_name");
+            let new_name = require_str!(args, "new_name");
+            match drive::val_drive_rename_file(domain, parent, file_name, new_name).await {
                 Ok(v) => ToolResult::json(&v),
                 Err(e) => ToolResult::error(format!("rename-val-drive-file failed: {}", e)),
             }
@@ -222,11 +243,19 @@ pub async fn call(name: &str, args: Value) -> ToolResult {
 
         "move-val-drive-file" => {
             let domain = require_str!(args, "domain");
-            let body = match args.get("body") {
-                Some(v) if v.is_object() => v.clone(),
-                _ => return ToolResult::error("'body' must be an object".to_string()),
-            };
-            match drive::val_drive_move_file(domain, body).await {
+            let source_parent = require_str!(args, "source_parent");
+            let source_name = require_str!(args, "source_name");
+            let target_parent = require_str!(args, "target_parent");
+            let item_type = require_str!(args, "type");
+            match drive::val_drive_move_file(
+                domain,
+                source_parent,
+                source_name,
+                target_parent,
+                item_type,
+            )
+            .await
+            {
                 Ok(v) => ToolResult::json(&v),
                 Err(e) => ToolResult::error(format!("move-val-drive-file failed: {}", e)),
             }

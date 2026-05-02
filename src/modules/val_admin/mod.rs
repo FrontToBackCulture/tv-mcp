@@ -228,6 +228,16 @@ pub async fn update_zone(
         // The auth check needs phase_pr_id (the parent space id) on the body.
         obj.entry("phase_pr_id".to_string())
             .or_insert_with(|| Value::String(space_id.to_string()));
+        // val-services Phase.updateZone fires movePerspectiveToSpace whenever
+        // `phase_pr_id !== value` — and that path attempts to read JSON
+        // columns that are null on freshly-created zones, throwing
+        // "invalid input syntax for type json". Default `value` to the same
+        // space id so the move is skipped unless the caller explicitly
+        // overrides it (i.e. they actually want to move the zone).
+        let pr_id = obj.get("phase_pr_id").cloned();
+        if let Some(pr) = pr_id {
+            obj.entry("value".to_string()).or_insert(pr);
+        }
     }
     let body = json!({ "phase": phase });
     post_json(domain, "update-val-zone", "/db/admin-phase/updatePhase", body).await
@@ -276,9 +286,23 @@ pub async fn update_table(domain: &str, table_id: &str, updates: Value) -> CmdRe
     }
     let mut repo_table = updates;
     if let Some(obj) = repo_table.as_object_mut() {
-        // val-services keys the update by `value` (the table id / custom_tbl identifier)
-        // and also accepts `table_name` as the canonical name field.
+        // val-services /api/v1/tables/update needs three identifying fields:
+        //   - `table_name` and `value` — the physical custom_tbl_<repo>_<id>
+        //     used by the permission check + the SQL update target.
+        //   - `id` — the trailing numeric table id (last segment), used by
+        //     updateRepositoryTable for the row update; without it the
+        //     handler throws "ID cannot be blank."
         obj.insert("value".to_string(), Value::String(table_id.to_string()));
+        obj.entry("table_name".to_string())
+            .or_insert_with(|| Value::String(table_id.to_string()));
+        if !obj.contains_key("id") {
+            // Extract trailing numeric id from custom_tbl_<repo>_<id>
+            if let Some(numeric) = table_id.rsplit('_').next() {
+                if let Ok(n) = numeric.parse::<i64>() {
+                    obj.insert("id".to_string(), Value::Number(n.into()));
+                }
+            }
+        }
     }
     let body = json!({ "repoTable": repo_table });
     post_json(domain, "update-val-table", "/db/admin-repoTable/updateRepoTable", body).await
@@ -509,7 +533,11 @@ pub async fn update_field(domain: &str, updates: Value) -> CmdResult<Value> {
     if !updates.is_object() {
         return Err(CommandError::Config("'updates' must be an object".to_string()));
     }
-    post_json(domain, "update-val-field", "/db/admin-fields/updateField", updates).await
+    // val-services /admin-fields/updateField reads `request.body.field` and
+    // checks `field.table_name || field.value` for the permission check.
+    // Wrap the updates payload accordingly.
+    let body = json!({ "field": updates });
+    post_json(domain, "update-val-field", "/db/admin-fields/updateField", body).await
 }
 
 /// Move a set of tables to a different zone.
@@ -641,11 +669,11 @@ pub async fn create_query(
 }
 
 /// Update an existing VAL query.
-/// POST /db/data/v1/saveDSQuery
 ///
-/// The query id MUST be passed as `dsid` (val-services uses that name, not `id`).
-/// Pass the full `datasource` to replace it; partial updates aren't supported by
-/// this endpoint — it does an INSERT with the same id (versioning by row history).
+/// val-services `saveDSQuery` does a literal INSERT — sending the same id twice
+/// trips the `querybuilder_master_pkey` unique constraint. The UI works around
+/// this by deleting the existing row first, then re-inserting. We mirror that
+/// here so callers can treat this as a normal update.
 pub async fn update_query(
     domain: &str,
     dsid: &str,
@@ -654,6 +682,14 @@ pub async fn update_query(
     if !updates.is_object() {
         return Err(CommandError::Config("'updates' must be an object".to_string()));
     }
+    if dsid.trim().is_empty() {
+        return Err(CommandError::Config("'dsid' is required".to_string()));
+    }
+    // 1) Delete existing row (idempotent — endpoint tolerates absent ids).
+    let delete_path = format!("/db/data/v1/deleteDSQuery/{}", dsid);
+    let _ = get_json(domain, "update-val-query", &delete_path).await;
+
+    // 2) Re-insert with the desired payload, forcing the dsid to match.
     let mut body = updates;
     if let Some(obj) = body.as_object_mut() {
         obj.insert("dsid".to_string(), Value::String(dsid.to_string()));
@@ -707,7 +743,10 @@ pub async fn clone_table(
     }
     // Clone uses the same body wrapper as create. `value` = target zone (auth
     // check entity); `parentId`/source table id passed for the helper to find
-    // the original definition.
+    // the original definition. `selected_table` is read by
+    // handleCloneIntegrationSettings (it splits the string to find the source
+    // repo + table id) — without it the clone fails with "Invalid table
+    // selected".
     let body = json!({
         "repoTable": {
             "name": new_name,
@@ -715,6 +754,7 @@ pub async fn clone_table(
             "value": zone_id,
             "parentId": source_table_id,
             "source_table": source_table_id,
+            "selected_table": source_table_id,
             "metadata": {},
         }
     });
@@ -729,7 +769,7 @@ pub async fn list_linkages(domain: &str) -> CmdResult<Value> {
     get_json(domain, "list-val-linkages", "/db/admin-repoType/getLinkages/").await
 }
 
-pub async fn create_linkage(domain: &str, linkage: Value) -> CmdResult<Value> {
+pub async fn create_linkage(domain: &str, mut linkage: Value) -> CmdResult<Value> {
     if !linkage.is_object() {
         return Err(CommandError::Config(
             "'linkage' must be an object".to_string(),
@@ -753,30 +793,74 @@ pub async fn create_linkage(domain: &str, linkage: Value) -> CmdResult<Value> {
             }
         }
     }
-    let body = json!({ "linkage": linkage });
-    post_json(domain, "create-val-linkage", "/db/admin-repoType/addLinkage", body).await
-}
-
-pub async fn update_linkage(domain: &str, linkage: Value) -> CmdResult<Value> {
-    if !linkage.is_object() {
-        return Err(CommandError::Config(
-            "'linkage' must be an object".to_string(),
-        ));
-    }
-    // updateLinkage handler also requires source_zone_id + target_zone_id for
-    // the permission check, plus an `id` to identify which linkage to update.
-    let required = ["id", "source_zone_id", "target_zone_id"];
-    if let Some(obj) = linkage.as_object() {
-        for k in required {
-            if !obj.contains_key(k) {
-                return Err(CommandError::Config(format!(
-                    "'linkage.{}' is required",
-                    k
-                )));
+    // Route-level permission check reads `repo_source_tablename` /
+    // `repo_assoc_tablename`; internals read `repo_source_name` / `repo_assoc_name`.
+    // They're functionally identical (table id like custom_tbl_<zone>_<seq>) — mirror.
+    if let Some(obj) = linkage.as_object_mut() {
+        if !obj.contains_key("repo_source_tablename") {
+            if let Some(v) = obj.get("repo_source_name").cloned() {
+                obj.insert("repo_source_tablename".to_string(), v);
+            }
+        }
+        if !obj.contains_key("repo_assoc_tablename") {
+            if let Some(v) = obj.get("repo_assoc_name").cloned() {
+                obj.insert("repo_assoc_tablename".to_string(), v);
             }
         }
     }
     let body = json!({ "linkage": linkage });
+    post_json(domain, "create-val-linkage", "/db/admin-repoType/addLinkage", body).await
+}
+
+pub async fn update_linkage(domain: &str, updates: Value) -> CmdResult<Value> {
+    if !updates.is_object() {
+        return Err(CommandError::Config(
+            "'linkage' must be an object".to_string(),
+        ));
+    }
+    // updateLinkage runs a literal SQL UPDATE that writes EVERY column —
+    // any missing key becomes the literal string "undefined" in SQL. To make
+    // partial updates safe, fetch the current linkage row and merge user-
+    // supplied changes on top.
+    let id = updates
+        .get("id")
+        .and_then(|v| v.as_i64().map(|n| n.to_string()).or_else(|| v.as_str().map(|s| s.to_string())))
+        .ok_or_else(|| CommandError::Config("'linkage.id' is required".to_string()))?;
+
+    let existing_list = list_linkages(domain).await?;
+    let arr = existing_list
+        .as_array()
+        .ok_or_else(|| CommandError::Internal("list-val-linkages did not return an array".to_string()))?;
+    let current = arr
+        .iter()
+        .find(|row| {
+            row.get("id")
+                .and_then(|v| v.as_i64().map(|n| n.to_string()).or_else(|| v.as_str().map(|s| s.to_string())))
+                .as_deref() == Some(id.as_str())
+        })
+        .ok_or_else(|| CommandError::NotFound(format!("linkage id={} not found", id)))?
+        .clone();
+
+    // Start from current, overlay updates.
+    let mut merged = current;
+    if let (Some(merged_obj), Some(updates_obj)) = (merged.as_object_mut(), updates.as_object()) {
+        for (k, v) in updates_obj {
+            merged_obj.insert(k.clone(), v.clone());
+        }
+        // Mirror _name → _tablename for the route's permission check.
+        if !merged_obj.contains_key("repo_source_tablename") {
+            if let Some(v) = merged_obj.get("repo_source_name").cloned() {
+                merged_obj.insert("repo_source_tablename".to_string(), v);
+            }
+        }
+        if !merged_obj.contains_key("repo_assoc_tablename") {
+            if let Some(v) = merged_obj.get("repo_assoc_name").cloned() {
+                merged_obj.insert("repo_assoc_tablename".to_string(), v);
+            }
+        }
+    }
+
+    let body = json!({ "linkage": merged });
     post_json(domain, "update-val-linkage", "/db/admin-repoType/updateLinkage", body).await
 }
 

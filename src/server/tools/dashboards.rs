@@ -55,9 +55,12 @@ pub fn tools() -> Vec<Tool> {
         Tool {
             name: "create-val-dashboard".to_string(),
             description:
-                "Create a new VAL dashboard. `dashboard` is the full saveDashboard payload \
-                 (basicInfo, dashboardInfo, layout, widgets); omit `id` (the server assigns \
-                 one)."
+                "Create a new VAL dashboard. tv-mcp uses the two-step create flow: hits \
+                 `createDashboard?name=...&category=...` (server assigns id), then if you \
+                 supplied `widgets`, `settings`, or `permission`, follows up with `saveDashboard` \
+                 to populate the layout. Required: `dashboard.name`. Optional: `category` \
+                 (defaults 'private'), `widgets`, `settings`, `permission`. Returns the new \
+                 dashboard's id."
                     .to_string(),
             input_schema: InputSchema::with_properties(
                 json!({

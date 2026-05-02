@@ -466,10 +466,12 @@ pub fn tools() -> Vec<Tool> {
             name: "update-val-field".to_string(),
             description:
                 "Update an existing field's metadata. \
-                 `updates` must include identifiers — at minimum `id` (or `dft_nodefields_id`), \
-                 `column_name`, and `value` (the table id) — plus the fields to change. \
-                 Recognized keys: `name`, `data_type`, `desc`, `category`, `column_length`, \
-                 `colour`, `predefined_values`, `table_name`."
+                 `updates` must include identifiers AND core attributes — at minimum `id` \
+                 (or `dft_nodefields_id`), `column_name`, `value` (the table id), `data_type`, \
+                 and `category`. Even on partial updates, val-services revalidates the full \
+                 field record, so `data_type` cannot be omitted. Optional keys: `name`, `desc`, \
+                 `column_length`, `colour`, `predefined_values`, `table_name`. Use \
+                 `list-val-fields` first to fetch current `data_type` and `category`."
                     .to_string(),
             input_schema: InputSchema::with_properties(
                 json!({
@@ -623,11 +625,11 @@ pub fn tools() -> Vec<Tool> {
         Tool {
             name: "update-val-query".to_string(),
             description:
-                "Update an existing VAL query. \
-                 `updates` should include `name`, `datasource`, and optionally `category`, \
-                 `permission`, `tags`. Note: the endpoint does a full INSERT with the same id, so \
-                 partial updates require fetching the current `datasource` first via `sync-val-queries` \
-                 or `execute-val-sql` and merging client-side."
+                "Update an existing VAL query. tv-mcp deletes the existing row then re-inserts \
+                 (mirrors the UI flow — saveDSQuery is INSERT-only). `updates` MUST include the \
+                 full `datasource` (basicInfo + queryInfo) and `name`; optional: `category`, \
+                 `permission`, `tags`. Use `get-val-query` to fetch the current datasource and \
+                 merge changes client-side first."
                     .to_string(),
             input_schema: InputSchema::with_properties(
                 json!({
@@ -718,9 +720,13 @@ pub fn tools() -> Vec<Tool> {
         Tool {
             name: "update-val-linkage".to_string(),
             description:
-                "Update an existing linkage. `linkage` must include `id` (linkage row id), plus \
-                 `source_zone_id` and `target_zone_id` (used for the permission check), plus the \
-                 fields to change."
+                "Update an existing linkage. Partial updates are safe: tv-mcp fetches the \
+                 current linkage row and merges your changes on top before sending (val-services \
+                 writes every column via raw SQL, so missing keys would otherwise corrupt the row \
+                 with literal 'undefined'). `linkage` must include `id` (linkage row id) and \
+                 `source_zone_id` / `target_zone_id` (for the permission check). Common editable \
+                 keys: `repo_source_col`, `repo_assoc_col`, `repo_source_display_col`, \
+                 `repo_assoc_display_col`."
                     .to_string(),
             input_schema: InputSchema::with_properties(
                 json!({

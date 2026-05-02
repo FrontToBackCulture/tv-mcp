@@ -154,8 +154,13 @@ pub async fn call_tool(name: &str, arguments: Value) -> ToolResult {
         return docgen::call(name, arguments).await;
     }
 
-    // VAL Sync tools
-    if name.starts_with("sync-val-") || name.starts_with("sync-all-domain-") || name == "execute-val-sql" || name == "execute-supabase-sql" {
+    // VAL Sync tools — excludes `sync-val-domain` which belongs to the cross-domain
+    // dispatcher below (it's a write op, not a sync-from-source-of-truth pull).
+    if (name.starts_with("sync-val-") && name != "sync-val-domain")
+        || name.starts_with("sync-all-domain-")
+        || name == "execute-val-sql"
+        || name == "execute-supabase-sql"
+    {
         return val_sync::call(name, arguments).await;
     }
 
