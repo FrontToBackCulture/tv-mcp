@@ -94,6 +94,69 @@ pub fn tools() -> Vec<Tool> {
             ),
         },
         Tool {
+            name: "promote-val-resources".to_string(),
+            description:
+                "Bundled cross-domain promotion. Pushes tables / workflows / dashboards from \
+                 `source` to `target` in dependency order (tables → workflows → dashboards), \
+                 polling each step until done. Pass arrays of resource IDs for the types you \
+                 want to promote (omit a type to skip it). For dashboards, set \
+                 `include_queries: true` to also pull the queries each one references — strongly \
+                 recommended. \
+                 \
+                 **For tables:** ALWAYS pass `space_ids` AND `zone_ids` for the parent space \
+                 and zones containing the tables. Without them the tables are inserted on the \
+                 target but orphaned (no parent zone), and the dashboard UI won't show them. \
+                 Discover them via `list-val-tables({ domain: source })` → each table row has \
+                 `spaces` and `zones` arrays. \
+                 \
+                 By default the tool waits for completion (poll interval 2s, timeout 120s); set \
+                 `wait_for_completion: false` to fire-and-forget."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "source": { "type": "string", "description": "Source VAL domain (typically 'lab')." },
+                    "target": { "type": "string", "description": "Target VAL domain (e.g., 'koi', 'studio')." },
+                    "tables": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Table identifiers to promote (e.g. 'custom_tbl_1_5'). Auto-includes parent spaces/zones, columns, linkages, tableforms, fieldcats."
+                    },
+                    "workflows": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Workflow job IDs to promote."
+                    },
+                    "dashboards": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Dashboard IDs to promote."
+                    },
+                    "include_queries": {
+                        "type": "boolean",
+                        "description": "When promoting dashboards, also pull the queries each one references. Default false; set true to avoid empty dashboards on the target."
+                    },
+                    "space_ids": {
+                        "type": "array",
+                        "items": { "type": "integer" },
+                        "description": "Optional. Scope tables sync by parent space."
+                    },
+                    "zone_ids": {
+                        "type": "array",
+                        "items": { "type": "integer" },
+                        "description": "Optional. Scope tables sync by parent zone."
+                    },
+                    "instance_id": { "type": "string", "description": "Optional. solution_instances.id for grouping." },
+                    "system_id": { "type": "string", "description": "Optional. System id within solution." },
+                    "system_type": { "type": "string", "description": "Optional. System type label." },
+                    "override_creator": { "type": "integer", "description": "Optional. User id to attribute as creator on target. Defaults to 1." },
+                    "wait_for_completion": { "type": "boolean", "description": "Default true. Set false to return immediately after each kickoff (no polling)." },
+                    "poll_interval_secs": { "type": "integer", "description": "Default 2. Interval between get-val-sync-status polls." },
+                    "poll_timeout_secs": { "type": "integer", "description": "Default 120. Per-step polling deadline before giving up." }
+                }),
+                vec!["source".to_string(), "target".to_string()],
+            ),
+        },
+        Tool {
             name: "get-val-sync-status".to_string(),
             description:
                 "Poll a cross-domain sync job's progress. Pass the `source` domain (where the \
@@ -164,6 +227,48 @@ pub async fn call(name: &str, args: Value) -> ToolResult {
             {
                 Ok(v) => ToolResult::json(&v),
                 Err(e) => ToolResult::error(format!("sync-val-domain failed: {}", e)),
+            }
+        }
+
+        "promote-val-resources" => {
+            let source = require_str!(args, "source");
+            let target = require_str!(args, "target");
+
+            fn str_array(v: Option<&Value>) -> Option<Vec<String>> {
+                v.and_then(|val| val.as_array()).map(|arr| {
+                    arr.iter()
+                        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                        .collect()
+                })
+            }
+            fn int_array(v: Option<&Value>) -> Option<Vec<i64>> {
+                v.and_then(|val| val.as_array()).map(|arr| {
+                    arr.iter().filter_map(|x| x.as_i64()).collect()
+                })
+            }
+
+            let req = val_cross_sync::PromoteRequest {
+                tables: str_array(args.get("tables")),
+                workflows: str_array(args.get("workflows")),
+                dashboards: str_array(args.get("dashboards")),
+                include_queries: args.get("include_queries").and_then(|v| v.as_bool()),
+                space_ids: int_array(args.get("space_ids")),
+                zone_ids: int_array(args.get("zone_ids")),
+                instance_id: args.get("instance_id").and_then(|v| v.as_str()).map(String::from),
+                system_id: args.get("system_id").and_then(|v| v.as_str()).map(String::from),
+                system_type: args.get("system_type").and_then(|v| v.as_str()).map(String::from),
+                override_creator: args.get("override_creator").and_then(|v| v.as_i64()),
+                poll_interval_secs: args.get("poll_interval_secs").and_then(|v| v.as_u64()),
+                poll_timeout_secs: args.get("poll_timeout_secs").and_then(|v| v.as_u64()),
+                wait_for_completion: args
+                    .get("wait_for_completion")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true),
+            };
+
+            match val_cross_sync::promote_resources(&source, &target, req).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("promote-val-resources failed: {}", e)),
             }
         }
 

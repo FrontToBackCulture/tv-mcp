@@ -139,7 +139,7 @@ fn categorize(name: &str) -> &'static str {
         || name == "update-val-dashboard-widget"
     {
         "VAL Admin"
-    } else if name == "sync-val-domain" || name == "get-val-sync-status" {
+    } else if name == "sync-val-domain" || name == "get-val-sync-status" || name == "promote-val-resources" {
         "VAL Admin"
     } else if name == "list-val-drive-folders" || name == "create-val-drive-folder" {
         // Folder *structure* ops are VAL configuration, not data plane

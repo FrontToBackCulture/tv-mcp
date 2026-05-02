@@ -181,7 +181,7 @@ pub async fn call_tool(name: &str, arguments: Value) -> ToolResult {
     }
 
     // VAL Cross-Domain Sync
-    if name == "sync-val-domain" || name == "get-val-sync-status" {
+    if name == "sync-val-domain" || name == "get-val-sync-status" || name == "promote-val-resources" {
         return val_cross_sync::call(name, arguments).await;
     }
 
