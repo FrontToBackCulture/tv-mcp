@@ -135,6 +135,8 @@ fn categorize(name: &str) -> &'static str {
         || name == "create-val-dashboard"
         || name == "update-val-dashboard"
         || name == "duplicate-val-dashboard"
+        || name == "add-val-dashboard-widget"
+        || name == "update-val-dashboard-widget"
     {
         "VAL Admin"
     } else if name == "sync-val-domain" || name == "get-val-sync-status" {

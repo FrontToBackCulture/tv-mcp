@@ -175,7 +175,8 @@ pub async fn call_tool(name: &str, arguments: Value) -> ToolResult {
     // VAL Dashboards
     if name == "list-val-dashboards" || name == "get-val-dashboard"
         || name == "create-val-dashboard" || name == "update-val-dashboard"
-        || name == "duplicate-val-dashboard" {
+        || name == "duplicate-val-dashboard"
+        || name == "add-val-dashboard-widget" || name == "update-val-dashboard-widget" {
         return dashboards::call(name, arguments).await;
     }
 

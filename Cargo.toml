@@ -58,6 +58,9 @@ pulldown-cmark = "0.10"
 # Hashing
 sha2 = "0.10"
 
+# UUIDs (dashboard widget ids, etc.)
+uuid = { version = "1", features = ["v4"] }
+
 # URL encoding
 urlencoding = "2"
 

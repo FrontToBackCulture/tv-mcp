@@ -173,6 +173,142 @@ pub async fn update_dashboard(domain: &str, id: &str, dashboard: Value) -> CmdRe
     post_json(domain, "update-val-dashboard", "/db/dashboard/v1/saveDashboard", dashboard).await
 }
 
+/// Add a widget to a dashboard. val-services has no dedicated widget endpoint —
+/// the entire dashboard payload is rewritten via saveDashboard. This wrapper
+/// fetches the current dashboard, appends the widget to `widgets[]`, and saves
+/// the full payload back. If `widget.id` is missing, a UUID v4 is generated so
+/// the widget can be referenced later by `update-val-dashboard-widget`.
+pub async fn add_dashboard_widget(
+    domain: &str,
+    dashboard_id: &str,
+    widget: Value,
+) -> CmdResult<Value> {
+    if dashboard_id.trim().is_empty() {
+        return Err(CommandError::Config(
+            "'dashboard_id' cannot be empty".to_string(),
+        ));
+    }
+    let mut widget = widget;
+    let widget_obj = widget
+        .as_object_mut()
+        .ok_or_else(|| CommandError::Config("'widget' must be an object".to_string()))?;
+    if !widget_obj.contains_key("id") {
+        widget_obj.insert(
+            "id".to_string(),
+            Value::String(uuid::Uuid::new_v4().to_string()),
+        );
+    }
+    let new_widget_id = widget_obj
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let current = get_dashboard(domain, dashboard_id).await?;
+    let mut current_obj = current
+        .as_object()
+        .cloned()
+        .ok_or_else(|| CommandError::Internal("get-val-dashboard did not return an object".to_string()))?;
+    let mut widgets = match current_obj.remove("widgets") {
+        Some(Value::Array(arr)) => arr,
+        _ => Vec::new(),
+    };
+    widgets.push(widget);
+
+    // Build the saveDashboard payload (flat — validator reads body.{id,name}).
+    let mut save_body = current_obj;
+    save_body.insert("id".to_string(), Value::String(dashboard_id.to_string()));
+    save_body.insert("widgets".to_string(), Value::Array(widgets));
+    post_json(
+        domain,
+        "add-val-dashboard-widget",
+        "/db/dashboard/v1/saveDashboard",
+        Value::Object(save_body),
+    )
+    .await?;
+
+    Ok(json!({ "dashboard_id": dashboard_id, "widget_id": new_widget_id }))
+}
+
+/// Update an existing widget on a dashboard. Fetches the dashboard, finds the
+/// widget by `id` in `widgets[]`, deep-merges `updates` into it, then saves.
+/// `updates` keys are top-level (e.g. `name`, `grid`, `settings`); nested
+/// objects are merged recursively, scalars and arrays are replaced.
+pub async fn update_dashboard_widget(
+    domain: &str,
+    dashboard_id: &str,
+    widget_id: &str,
+    updates: Value,
+) -> CmdResult<Value> {
+    if dashboard_id.trim().is_empty() {
+        return Err(CommandError::Config(
+            "'dashboard_id' cannot be empty".to_string(),
+        ));
+    }
+    if widget_id.trim().is_empty() {
+        return Err(CommandError::Config(
+            "'widget_id' cannot be empty".to_string(),
+        ));
+    }
+    if !updates.is_object() {
+        return Err(CommandError::Config(
+            "'updates' must be an object".to_string(),
+        ));
+    }
+
+    let current = get_dashboard(domain, dashboard_id).await?;
+    let mut current_obj = current
+        .as_object()
+        .cloned()
+        .ok_or_else(|| CommandError::Internal("get-val-dashboard did not return an object".to_string()))?;
+    let mut widgets = match current_obj.remove("widgets") {
+        Some(Value::Array(arr)) => arr,
+        _ => Vec::new(),
+    };
+
+    let mut found = false;
+    for w in widgets.iter_mut() {
+        if w.get("id").and_then(|v| v.as_str()) == Some(widget_id) {
+            deep_merge(w, &updates);
+            found = true;
+            break;
+        }
+    }
+    if !found {
+        return Err(CommandError::NotFound(format!(
+            "widget id={} not found on dashboard {}",
+            widget_id, dashboard_id
+        )));
+    }
+
+    let mut save_body = current_obj;
+    save_body.insert("id".to_string(), Value::String(dashboard_id.to_string()));
+    save_body.insert("widgets".to_string(), Value::Array(widgets));
+    post_json(
+        domain,
+        "update-val-dashboard-widget",
+        "/db/dashboard/v1/saveDashboard",
+        Value::Object(save_body),
+    )
+    .await?;
+
+    Ok(json!({ "dashboard_id": dashboard_id, "widget_id": widget_id }))
+}
+
+/// Recursive merge: for objects, merge keys; for everything else, overwrite.
+fn deep_merge(target: &mut Value, src: &Value) {
+    match (target, src) {
+        (Value::Object(t), Value::Object(s)) => {
+            for (k, v) in s {
+                deep_merge(t.entry(k.clone()).or_insert(Value::Null), v);
+            }
+        }
+        (t, s) => {
+            *t = s.clone();
+        }
+    }
+}
+
 pub async fn duplicate_dashboard(
     domain: &str,
     source_id: &str,

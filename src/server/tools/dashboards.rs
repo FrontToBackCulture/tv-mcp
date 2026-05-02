@@ -111,6 +111,58 @@ pub fn tools() -> Vec<Tool> {
                 vec!["domain".to_string(), "source_id".to_string()],
             ),
         },
+        Tool {
+            name: "add-val-dashboard-widget".to_string(),
+            description:
+                "Add a widget to an existing dashboard. val-services has no widget endpoint — \
+                 wrapper fetches the dashboard, appends the widget to `widgets[]`, and saves the \
+                 full payload back. If `widget.id` is missing, a UUID v4 is generated and \
+                 returned so you can target it later via `update-val-dashboard-widget`. Provide \
+                 the full widget shape: `{ id?, name, grid, settings, ... }` per val-react widget \
+                 schema."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "dashboard_id": { "type": "string", "description": "Target dashboard id" },
+                    "widget": {
+                        "type": "object",
+                        "description": "Full widget config (id optional — auto-assigned if omitted)."
+                    }
+                }),
+                vec![
+                    "domain".to_string(),
+                    "dashboard_id".to_string(),
+                    "widget".to_string(),
+                ],
+            ),
+        },
+        Tool {
+            name: "update-val-dashboard-widget".to_string(),
+            description:
+                "Update a widget on a dashboard by widget id. Wrapper fetches the dashboard, \
+                 finds the widget in `widgets[]`, deep-merges `updates` into it (objects merge \
+                 recursively, scalars/arrays replace), then saves the full payload. Use \
+                 `get-val-dashboard` first to inspect the widget shape."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "dashboard_id": { "type": "string", "description": "Dashboard id" },
+                    "widget_id": { "type": "string", "description": "Widget id (uuid) to update" },
+                    "updates": {
+                        "type": "object",
+                        "description": "Partial widget payload — deep-merged into the existing widget."
+                    }
+                }),
+                vec![
+                    "domain".to_string(),
+                    "dashboard_id".to_string(),
+                    "widget_id".to_string(),
+                    "updates".to_string(),
+                ],
+            ),
+        },
     ]
 }
 
@@ -168,6 +220,33 @@ pub async fn call(name: &str, args: Value) -> ToolResult {
             match dashboards::duplicate_dashboard(&domain, &source_id, new_name).await {
                 Ok(v) => ToolResult::json(&v),
                 Err(e) => ToolResult::error(format!("duplicate-val-dashboard failed: {}", e)),
+            }
+        }
+
+        "add-val-dashboard-widget" => {
+            let domain = require_str!(args, "domain");
+            let dashboard_id = require_str!(args, "dashboard_id");
+            let widget = match args.get("widget") {
+                Some(v) if v.is_object() => v.clone(),
+                _ => return ToolResult::error("'widget' must be an object".to_string()),
+            };
+            match dashboards::add_dashboard_widget(&domain, &dashboard_id, widget).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("add-val-dashboard-widget failed: {}", e)),
+            }
+        }
+
+        "update-val-dashboard-widget" => {
+            let domain = require_str!(args, "domain");
+            let dashboard_id = require_str!(args, "dashboard_id");
+            let widget_id = require_str!(args, "widget_id");
+            let updates = match args.get("updates") {
+                Some(v) if v.is_object() => v.clone(),
+                _ => return ToolResult::error("'updates' must be an object".to_string()),
+            };
+            match dashboards::update_dashboard_widget(&domain, &dashboard_id, &widget_id, updates).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("update-val-dashboard-widget failed: {}", e)),
             }
         }
 
