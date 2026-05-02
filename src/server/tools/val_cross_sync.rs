@@ -96,18 +96,20 @@ pub fn tools() -> Vec<Tool> {
         Tool {
             name: "promote-val-resources".to_string(),
             description:
-                "Bundled cross-domain promotion. Pushes tables / workflows / dashboards from \
-                 `source` to `target` in dependency order (tables → workflows → dashboards), \
-                 polling each step until done. Pass arrays of resource IDs for the types you \
-                 want to promote (omit a type to skip it). For dashboards, set \
-                 `include_queries: true` to also pull the queries each one references — strongly \
-                 recommended. \
+                "Bundled cross-domain promotion. Pushes resources from `source` to `target` in \
+                 dependency order (spaces → zones → tables → workflows → dashboards), polling \
+                 each step until done. Pass arrays of resource IDs for the types you want to \
+                 promote (omit a type to skip it). For dashboards, set `include_queries: true` \
+                 to also pull the queries each one references — strongly recommended. \
                  \
-                 **For tables:** ALWAYS pass `space_ids` AND `zone_ids` for the parent space \
+                 **Use `spaces` / `zones` arrays alone** to scaffold the project structure on \
+                 the target without bringing tables (no fieldcats, no columns, no extras). \
+                 \
+                 **For `tables`:** ALWAYS pass `space_ids` AND `zone_ids` for the parent space \
                  and zones containing the tables. Without them the tables are inserted on the \
-                 target but orphaned (no parent zone), and the dashboard UI won't show them. \
-                 Discover them via `list-val-tables({ domain: source })` → each table row has \
-                 `spaces` and `zones` arrays. \
+                 target but orphaned (no parent zone). Discover them via \
+                 `list-val-tables({ domain: source })` — each table row has `spaces` and `zones` \
+                 arrays. \
                  \
                  By default the tool waits for completion (poll interval 2s, timeout 120s); set \
                  `wait_for_completion: false` to fire-and-forget."
@@ -116,10 +118,20 @@ pub fn tools() -> Vec<Tool> {
                 json!({
                     "source": { "type": "string", "description": "Source VAL domain (typically 'lab')." },
                     "target": { "type": "string", "description": "Target VAL domain (e.g., 'koi', 'studio')." },
+                    "spaces": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Space (project) IDs to promote — scaffold-only, no zones or tables."
+                    },
+                    "zones": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Zone (phase) IDs to promote. Parent space must already exist on target."
+                    },
                     "tables": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "Table identifiers to promote (e.g. 'custom_tbl_1_5'). Auto-includes parent spaces/zones, columns, linkages, tableforms, fieldcats."
+                        "description": "Table identifiers to promote (e.g. 'custom_tbl_1_5'). Auto-includes columns, linkages, tableforms, fieldcats. Pass space_ids + zone_ids for parents."
                     },
                     "workflows": {
                         "type": "array",
@@ -248,6 +260,8 @@ pub async fn call(name: &str, args: Value) -> ToolResult {
             }
 
             let req = val_cross_sync::PromoteRequest {
+                spaces: str_array(args.get("spaces")),
+                zones: str_array(args.get("zones")),
                 tables: str_array(args.get("tables")),
                 workflows: str_array(args.get("workflows")),
                 dashboards: str_array(args.get("dashboards")),

@@ -65,10 +65,10 @@ pub async fn sync_val_domain(
         ));
     }
     match resource_type {
-        "tables" | "workflows" | "dashboards" => {}
+        "spaces" | "zones" | "tables" | "workflows" | "dashboards" => {}
         other => {
             return Err(CommandError::Config(format!(
-                "'resource_type' must be 'tables', 'workflows', or 'dashboards' (got '{}')",
+                "'resource_type' must be 'spaces', 'zones', 'tables', 'workflows', or 'dashboards' (got '{}')",
                 other
             )));
         }
@@ -160,6 +160,8 @@ pub async fn get_val_sync_status(source: &str, sync_id: &str) -> CmdResult<Value
 
 #[derive(Default, Clone)]
 pub struct PromoteRequest {
+    pub spaces: Option<Vec<String>>,
+    pub zones: Option<Vec<String>>,
     pub tables: Option<Vec<String>>,
     pub workflows: Option<Vec<String>>,
     pub dashboards: Option<Vec<String>>,
@@ -195,6 +197,8 @@ pub async fn promote_resources(
     }
 
     let total_resources: usize = [
+        req.spaces.as_ref().map(|v| v.len()).unwrap_or(0),
+        req.zones.as_ref().map(|v| v.len()).unwrap_or(0),
         req.tables.as_ref().map(|v| v.len()).unwrap_or(0),
         req.workflows.as_ref().map(|v| v.len()).unwrap_or(0),
         req.dashboards.as_ref().map(|v| v.len()).unwrap_or(0),
@@ -203,7 +207,7 @@ pub async fn promote_resources(
     .sum();
     if total_resources == 0 {
         return Err(CommandError::Config(
-            "supply at least one of 'tables', 'workflows', 'dashboards'".to_string(),
+            "supply at least one of 'spaces', 'zones', 'tables', 'workflows', 'dashboards'".to_string(),
         ));
     }
 
@@ -214,8 +218,12 @@ pub async fn promote_resources(
 
     let mut steps: Vec<Value> = Vec::new();
 
-    // Run each non-empty resource type in order.
+    // Run each non-empty resource type in dependency order: spaces must exist
+    // before zones, zones before tables, tables before workflows/dashboards
+    // that may reference them.
     for (resource_type, resource_ids_opt) in [
+        ("spaces", req.spaces.as_ref()),
+        ("zones", req.zones.as_ref()),
         ("tables", req.tables.as_ref()),
         ("workflows", req.workflows.as_ref()),
         ("dashboards", req.dashboards.as_ref()),
