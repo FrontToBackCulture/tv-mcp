@@ -135,19 +135,28 @@ pub async fn create_dashboard(domain: &str, dashboard: Value) -> CmdResult<Value
         return Ok(created);
     }
 
-    // Populate layout via saveDashboard.
+    // Populate layout via saveDashboard. Validator + handler read body.{id,name}
+    // DIRECTLY — do NOT wrap in { dashboard: ... }.
     let mut save_body = obj.clone();
     save_body.insert("id".to_string(), Value::String(new_id.clone()));
     save_body.insert("name".to_string(), Value::String(name));
     save_body.insert("category".to_string(), Value::String(category));
-    let body = json!({ "dashboard": Value::Object(save_body) });
-    post_json(domain, "create-val-dashboard", "/db/dashboard/v1/saveDashboard", body).await?;
+    post_json(
+        domain,
+        "create-val-dashboard",
+        "/db/dashboard/v1/saveDashboard",
+        Value::Object(save_body),
+    )
+    .await?;
 
     Ok(created)
 }
 
 /// Update existing dashboard. saveDashboard does a full INSERT/UPDATE keyed by id —
 /// fetch via `get-val-dashboard` first and merge client-side.
+///
+/// Validator + handler read body.{id,name} DIRECTLY — do NOT wrap in
+/// { dashboard: ... }. We auto-inject `id` from the path arg if missing.
 pub async fn update_dashboard(domain: &str, id: &str, dashboard: Value) -> CmdResult<Value> {
     if id.trim().is_empty() {
         return Err(CommandError::Config("'id' cannot be empty".to_string()));
@@ -161,8 +170,7 @@ pub async fn update_dashboard(domain: &str, id: &str, dashboard: Value) -> CmdRe
     if let Some(obj) = dashboard.as_object_mut() {
         obj.insert("id".to_string(), Value::String(id.to_string()));
     }
-    let body = json!({ "dashboard": dashboard });
-    post_json(domain, "update-val-dashboard", "/db/dashboard/v1/saveDashboard", body).await
+    post_json(domain, "update-val-dashboard", "/db/dashboard/v1/saveDashboard", dashboard).await
 }
 
 pub async fn duplicate_dashboard(

@@ -215,19 +215,27 @@ pub async fn val_drive_move_file(
             .map(|s| s.to_string())
             .unwrap_or_else(|| p.trim_start_matches('/').to_string())
     };
+    let stripped_source_parent = strip_prefix(&source_parent);
     let body = serde_json::json!({
         "items": [{
             "id": source_name,
-            "path": strip_prefix(&source_parent),
+            "path": stripped_source_parent.clone(),
             "type": item_type,
         }],
         "targetFolder": strip_prefix(&target_parent),
     });
+    // moveFileSchema requires `folderPath` in querystring (used for permission
+    // scoping at the gateway layer). Use the source parent.
+    let folder_path = if stripped_source_parent.is_empty() {
+        "val_drive".to_string()
+    } else {
+        format!("val_drive/{}", stripped_source_parent)
+    };
     drive_request(
         &domain,
         reqwest::Method::POST,
         "/api/v1/val_drive/files/move",
-        vec![],
+        vec![("folderPath".to_string(), folder_path)],
         Some(body),
     )
     .await
@@ -335,21 +343,38 @@ async fn fetch_folders(
     let folders: Vec<DriveFolder> = items
         .into_iter()
         .filter_map(|item| {
-            let name = item
-                .get("name")
-                .or_else(|| item.get("folderName"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let id = item
-                .get("id")
-                .or_else(|| item.get("folderId"))
-                .or_else(|| item.get("prefix"))
-                .and_then(|v| v.as_str())
-                .unwrap_or(&name)
-                .to_string();
+            // Endpoint returns raw S3 ListObjectsV2 entries: { Key, Size, LastModified, ... }.
+            // Older shapes used { name, folderName, prefix }. Support both.
+            let s3_key = item.get("Key").and_then(|v| v.as_str()).map(|s| s.to_string());
+
+            let (id, name) = if let Some(key) = s3_key.as_deref() {
+                let trimmed = key.trim_end_matches('/');
+                let leaf = trimmed
+                    .rsplit_once('/')
+                    .map(|(_, leaf)| leaf)
+                    .unwrap_or(trimmed)
+                    .to_string();
+                (trimmed.to_string(), leaf)
+            } else {
+                let name = item
+                    .get("name")
+                    .or_else(|| item.get("folderName"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let id = item
+                    .get("id")
+                    .or_else(|| item.get("folderId"))
+                    .or_else(|| item.get("prefix"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&name)
+                    .to_string();
+                (id, name)
+            };
+
             let last_modified = item
-                .get("lastModified")
+                .get("LastModified")
+                .or_else(|| item.get("lastModified"))
                 .or_else(|| item.get("last_modified"))
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
