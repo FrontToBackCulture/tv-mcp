@@ -190,7 +190,10 @@ pub fn tools() -> Vec<Tool> {
                 "Create a new VAL table inside a zone. \
                  Returns the new table (custom_tbl_<zone>_<seq> identifier in the response). \
                  `repo_type` defaults to 'general'. Use `extras` to pass advanced fields like \
-                 autocalculate, populated_dates, or metadata."
+                 autocalculate, populated_dates, or metadata. **For tags on create:** the \
+                 create endpoint does NOT accept top-level `tags` — pass them inside metadata, \
+                 e.g. `extras: { \"metadata\": { \"tags\": [\"foo\", \"bar\"] } }`. To set tags \
+                 after creation, use `update-val-table` (which DOES accept top-level `tags`)."
                     .to_string(),
             input_schema: InputSchema::with_properties(
                 json!({
@@ -202,7 +205,7 @@ pub fn tools() -> Vec<Tool> {
                     "repo_type": { "type": "string", "description": "Repo type. Defaults to 'general'." },
                     "extras": {
                         "type": "object",
-                        "description": "Optional extra fields merged into the request body (autocalculate, populated_dates, metadata, etc.)"
+                        "description": "Optional extra fields merged into the request body (autocalculate, populated_dates, metadata, etc.). Tags must go inside metadata: { metadata: { tags: [...] } }."
                     }
                 }),
                 vec!["domain".to_string(), "zone_id".to_string(), "name".to_string()],
@@ -248,9 +251,12 @@ pub fn tools() -> Vec<Tool> {
             name: "update-val-table".to_string(),
             description:
                 "Update an existing VAL table's metadata (display name, prefix, repo_type, \
-                 autocalculate, populated_dates, metadata). Pass `updates` with the fields to \
-                 change. Does NOT modify columns/fields — use `update-val-field` and \
-                 `add-val-table-field(s)` for column changes."
+                 autocalculate, populated_dates, metadata, tags). Pass `updates` with the fields \
+                 to change. **For tags:** pass `tags` as a top-level array of strings in \
+                 `updates` (e.g. `{ \"tags\": [\"foo\", \"bar\"] }`). Stored under \
+                 `metadata.tags` server-side. Pass `[]` to clear all tags. Does NOT modify \
+                 columns/fields — use `update-val-field` and `add-val-table-field(s)` for \
+                 column changes."
                     .to_string(),
             input_schema: InputSchema::with_properties(
                 json!({
@@ -261,7 +267,7 @@ pub fn tools() -> Vec<Tool> {
                     },
                     "updates": {
                         "type": "object",
-                        "description": "Fields to update. Common: name (display name), prefix, repo_type, autocalculate, populated_dates, metadata."
+                        "description": "Fields to update. Common: name (display name), prefix, repo_type, autocalculate, populated_dates, metadata, tags (array of strings; pass [] to clear)."
                     }
                 }),
                 vec!["domain".to_string(), "table_id".to_string(), "updates".to_string()],
