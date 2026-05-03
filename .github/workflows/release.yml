@@ -114,11 +114,17 @@ jobs:
 
             ## Install
 
+            **macOS / Linux:**
             ```bash
             curl -sSL https://raw.githubusercontent.com/FrontToBackCulture/tv-mcp/main/install.sh | bash
             ```
 
-            Or download the binary for your platform below, place it at `~/.tv-mcp/bin/tv-mcp`, and make it executable.
+            **Windows (PowerShell):**
+            ```powershell
+            irm https://raw.githubusercontent.com/FrontToBackCulture/tv-mcp/main/install.ps1 | iex
+            ```
+
+            Or download the binary for your platform below and place it at `~/.tv-mcp/bin/tv-mcp` (macOS/Linux, make executable) or `%USERPROFILE%\.tv-mcp\bin\tv-mcp.exe` (Windows).
 
             | Platform | Binary |
             |----------|--------|
