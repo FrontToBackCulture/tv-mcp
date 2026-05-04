@@ -540,27 +540,219 @@ pub async fn update_field(domain: &str, updates: Value) -> CmdResult<Value> {
     post_json(domain, "update-val-field", "/db/admin-fields/updateField", body).await
 }
 
-/// Move a set of tables to a different zone.
+/// Add tables to a zone — additive, preserves all existing zone members.
 /// POST /db/admin-phase/updateTableAssignment
 ///
-/// `tables` is an array of table ids/objects — val-services groups them by
-/// repo type internally before reassigning, so passing the full repo-type
-/// objects is safest. Most callers pass `[{ id: <repo_type_id>, value: [<table_id>, ...] }, ...]`.
+/// **Why this is non-trivial:** the val-services endpoint is a SET operation,
+/// not an add. Its handler:
+///   1. takes `details.tables` (a flat array of table id strings),
+///   2. groups them by repo_type via `id.split('_')[2]`,
+///   3. for each repo_type in the input, builds a fresh repo_type entry with
+///      `value: <those grouped table ids>` (overwriting the existing entry),
+///   4. then `updateZoneTableRelations` does an unconditional
+///      `UPDATE phase_repo_tbl SET repo_phase_data = <new_json>` — which
+///      replaces the entire column.
+///
+/// So calling the raw endpoint with `[new_table_id]` would:
+///   - wipe every other table of the same repo_type, AND
+///   - wipe every other repo_type from the zone entirely (perspectives included).
+///
+/// To make `assign` actually mean "add", we fetch the current zone state,
+/// flatten its existing table ids (from every non-perspective repo_type),
+/// dedupe-union with the new ids, and send the full union as the flat
+/// `tables` payload. Result: val-services replays the SET with the union, so
+/// no rows are lost.
+///
+/// **Perspective limitation:** the val-services handler chokes on non-table-id
+/// values when grouping (`split('_')[2]` is undefined for perspective ids), so
+/// we strip any pre-existing perspective entries from the payload. If a zone
+/// has perspectives, `repo_phase_data`'s `pers` entry is rebuilt by val-services
+/// from the perspective tables themselves, not from this assignment call.
 pub async fn assign_table_to_zone(
     domain: &str,
     zone_id: &str,
     tables: Vec<Value>,
 ) -> CmdResult<Value> {
     if tables.is_empty() {
-        return Err(CommandError::Config("'tables' must contain at least one entry".to_string()));
+        return Err(CommandError::Config(
+            "'tables' must contain at least one entry".to_string(),
+        ));
     }
+
+    let phase_resp = get_zone(domain, zone_id).await?;
+    let existing_ids = collect_existing_table_ids(&phase_resp)?;
+    let new_ids = flatten_input_ids(&tables)?;
+
+    let mut union: Vec<String> = existing_ids;
+    for id in new_ids {
+        if !union.contains(&id) {
+            union.push(id);
+        }
+    }
+
     let body = json!({
         "details": {
             "phaseId": zone_id,
-            "tables": tables,
+            "tables": union,
         }
     });
-    post_json(domain, "assign-val-table-to-zone", "/db/admin-phase/updateTableAssignment", body).await
+    post_json(
+        domain,
+        "assign-val-table-to-zone",
+        "/db/admin-phase/updateTableAssignment",
+        body,
+    )
+    .await
+}
+
+/// Remove tables from a zone — preserves every OTHER table.
+/// POST /db/admin-phase/updateTableAssignment (same endpoint as assign).
+///
+/// Same client-side fetch+rewrite pattern: fetch current state, subtract the
+/// specified table ids, send back the remaining ids as the flat payload.
+/// Tables not currently in the zone are silently ignored.
+///
+/// **Note on emptying a zone:** val-services has a special branch for
+/// `details.tables.length === 0` that re-emits each existing repo_type with
+/// `value: []`. So sending an empty array clears all tables but PRESERVES the
+/// repo_type structure. Our remove routes through the same code path when the
+/// caller removes every table.
+pub async fn remove_tables_from_zone(
+    domain: &str,
+    zone_id: &str,
+    tables: Vec<Value>,
+) -> CmdResult<Value> {
+    if tables.is_empty() {
+        return Err(CommandError::Config(
+            "'tables' must contain at least one entry".to_string(),
+        ));
+    }
+
+    let phase_resp = get_zone(domain, zone_id).await?;
+    let existing_ids = collect_existing_table_ids(&phase_resp)?;
+    let remove_set = flatten_input_ids(&tables)?;
+
+    let remaining: Vec<String> = existing_ids
+        .into_iter()
+        .filter(|id| !remove_set.contains(id))
+        .collect();
+
+    let body = json!({
+        "details": {
+            "phaseId": zone_id,
+            "tables": remaining,
+        }
+    });
+    post_json(
+        domain,
+        "remove-val-table-from-zone",
+        "/db/admin-phase/updateTableAssignment",
+        body,
+    )
+    .await
+}
+
+/// Collect every existing table id across the zone's repo_phase_data, as a
+/// flat list of strings in the `custom_tbl_<rt>_<seq>` format. Skips the
+/// `pers` (perspective) repo_type — its `value` entries aren't table ids and
+/// would be misgrouped by val-services' `split('_')[2]` logic.
+fn collect_existing_table_ids(phase_resp: &Value) -> CmdResult<Vec<String>> {
+    let repo_data = extract_repo_phase_data(phase_resp)?;
+    let mut ids: Vec<String> = Vec::new();
+    for repo in &repo_data {
+        if matches!(repo_id_str(repo).as_deref(), Some("pers")) {
+            continue;
+        }
+        if let Some(arr) = repo.get("value").and_then(|v| v.as_array()) {
+            for v in arr {
+                if let Some(s) = v.as_str() {
+                    if is_custom_table_id(s) {
+                        ids.push(s.to_string());
+                    }
+                }
+            }
+        }
+    }
+    Ok(ids)
+}
+
+fn is_custom_table_id(s: &str) -> bool {
+    let parts: Vec<&str> = s.split('_').collect();
+    parts.len() >= 4 && parts[0] == "custom" && parts[1] == "tbl"
+}
+
+/// Flatten the user's `tables` input into a deduplicated list of table id
+/// strings. Accepts the flat form (`["custom_tbl_5_42", ...]`) and the
+/// canonical grouped form (`[{ id: <rt>, value: [<table_id>, ...] }, ...]`).
+fn flatten_input_ids(tables: &[Value]) -> CmdResult<Vec<String>> {
+    let mut ids: Vec<String> = Vec::new();
+    let mut push_unique = |s: String| {
+        if !ids.contains(&s) {
+            ids.push(s);
+        }
+    };
+    for t in tables {
+        if let Some(s) = t.as_str() {
+            if !is_custom_table_id(s) {
+                return Err(CommandError::Config(format!(
+                    "Table id '{}' is not in the expected 'custom_tbl_<repo_type>_<seq>' format.",
+                    s
+                )));
+            }
+            push_unique(s.to_string());
+        } else if let Some(obj) = t.as_object() {
+            let values = obj.get("value").and_then(|v| v.as_array()).ok_or_else(|| {
+                CommandError::Config(
+                    "Each grouped entry must include 'value' as an array of table id strings"
+                        .to_string(),
+                )
+            })?;
+            for v in values {
+                let s = v.as_str().ok_or_else(|| {
+                    CommandError::Config(
+                        "Grouped 'value' entries must be table id strings".to_string(),
+                    )
+                })?;
+                if !is_custom_table_id(s) {
+                    return Err(CommandError::Config(format!(
+                        "Table id '{}' is not in the expected 'custom_tbl_<repo_type>_<seq>' format.",
+                        s
+                    )));
+                }
+                push_unique(s.to_string());
+            }
+        } else {
+            return Err(CommandError::Config(
+                "Each 'tables' entry must be a table id string or { id, value: [...] } object"
+                    .to_string(),
+            ));
+        }
+    }
+    Ok(ids)
+}
+
+/// `get-val-zone` (`/db/zones/:id/info`) returns the phase_tbl row directly
+/// (single object). `repo_phase_data` may be null on a zone that has never
+/// had tables assigned — treat that as empty.
+fn extract_repo_phase_data(phase_resp: &Value) -> CmdResult<Vec<Value>> {
+    if !phase_resp.is_object() {
+        return Err(CommandError::Config(
+            "Unexpected zone response shape — expected an object".to_string(),
+        ));
+    }
+    Ok(phase_resp
+        .get("repo_phase_data")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default())
+}
+
+fn repo_id_str(repo: &Value) -> Option<String> {
+    repo.get("id").and_then(|v| {
+        v.as_str()
+            .map(|s| s.to_string())
+            .or_else(|| v.as_i64().map(|n| n.to_string()))
+    })
 }
 
 // ============================================================================

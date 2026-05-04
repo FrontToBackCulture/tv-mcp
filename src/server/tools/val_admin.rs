@@ -493,9 +493,19 @@ pub fn tools() -> Vec<Tool> {
         Tool {
             name: "assign-val-table-to-zone".to_string(),
             description:
-                "Move one or more tables to a target zone. \
-                 `tables` is grouped by repo type internally — pass either an array of table ids \
-                 or the canonical shape: `[{ id: <repo_type_id>, value: [<table_id>, ...] }, ...]`."
+                "**Adds** the specified tables to the zone (additive — preserves every existing \
+                 table and repo_type already in the zone). Pass either a flat array of table id \
+                 strings (e.g. `['custom_tbl_5_42']`) or the canonical grouped shape \
+                 (`[{ id: <repo_type_id>, value: [<table_id>, ...] }, ...]`). \
+                 \
+                 **For removal**, use `remove-val-table-from-zone` — calling assign with a \
+                 different table set will NOT remove anything. \
+                 \
+                 **Background:** the underlying val-services endpoint replaces the zone's entire \
+                 `repo_phase_data` column on every call, so this tool fetches the current zone \
+                 state and merges your additions before sending. Calling the raw endpoint \
+                 directly with only the new ids would silently delete every other table (and \
+                 every other repo_type) from the zone."
                     .to_string(),
             input_schema: InputSchema::with_properties(
                 json!({
@@ -503,7 +513,37 @@ pub fn tools() -> Vec<Tool> {
                     "zone_id": { "type": "string", "description": "Target zone (phase) id" },
                     "tables": {
                         "type": "array",
-                        "description": "Table ids or repo-type-grouped objects to assign to the target zone"
+                        "description": "Table ids to ADD to the zone. Either flat strings ('custom_tbl_<rt>_<seq>') or grouped objects ({ id: <repo_type_id>, value: [<table_id>, ...] })."
+                    }
+                }),
+                vec![
+                    "domain".to_string(),
+                    "zone_id".to_string(),
+                    "tables".to_string(),
+                ],
+            ),
+        },
+        Tool {
+            name: "remove-val-table-from-zone".to_string(),
+            description:
+                "**Removes** the specified tables from the zone (subtractive — preserves every \
+                 OTHER table and repo_type in the zone). Pass either a flat array of table id \
+                 strings or the grouped shape, same as `assign-val-table-to-zone`. \
+                 \
+                 Tables that aren't currently in the zone are silently ignored (no error). \
+                 \
+                 **Background:** same client-side fetch+rewrite pattern as assign — the \
+                 val-services endpoint is replacement-based, so this tool fetches the current \
+                 zone state, drops the specified table ids, and sends back the full preserved \
+                 payload."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "zone_id": { "type": "string", "description": "Zone (phase) id to remove tables from" },
+                    "tables": {
+                        "type": "array",
+                        "description": "Table ids to REMOVE from the zone. Either flat strings ('custom_tbl_<rt>_<seq>') or grouped objects ({ id: <repo_type_id>, value: [<table_id>, ...] })."
                     }
                 }),
                 vec![
@@ -1180,6 +1220,23 @@ pub async fn call(name: &str, args: Value) -> ToolResult {
             match val_admin::assign_table_to_zone(&domain, &zone_id, tables).await {
                 Ok(v) => ToolResult::json(&v),
                 Err(e) => ToolResult::error(format!("assign-val-table-to-zone failed: {}", e)),
+            }
+        }
+
+        "remove-val-table-from-zone" => {
+            let domain = require_str!(args, "domain");
+            let zone_id = require_str!(args, "zone_id");
+            let tables = match args.get("tables").and_then(|v| v.as_array()) {
+                Some(arr) if !arr.is_empty() => arr.clone(),
+                _ => {
+                    return ToolResult::error(
+                        "'tables' must be a non-empty array".to_string(),
+                    );
+                }
+            };
+            match val_admin::remove_tables_from_zone(&domain, &zone_id, tables).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("remove-val-table-from-zone failed: {}", e)),
             }
         }
 

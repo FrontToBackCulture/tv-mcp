@@ -101,6 +101,7 @@ fn categorize(name: &str) -> &'static str {
         || name == "list-val-table-dependencies"
         || name == "clone-val-table"
         || name == "assign-val-table-to-zone"
+        || name == "remove-val-table-from-zone"
         || name == "add-val-table-field"
         || name == "add-val-table-fields"
         || name == "remove-val-table-field"

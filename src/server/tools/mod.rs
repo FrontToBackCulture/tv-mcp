@@ -207,6 +207,7 @@ pub async fn call_tool(name: &str, arguments: Value) -> ToolResult {
         || name == "add-val-table-field" || name == "add-val-table-fields"
         || name == "remove-val-table-field"
         || name == "update-val-field" || name == "assign-val-table-to-zone"
+        || name == "remove-val-table-from-zone"
         || name == "list-val-fields" || name == "find-val-tables-with-field"
         || name == "create-val-query" || name == "update-val-query"
         || name == "copy-val-query"
