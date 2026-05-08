@@ -9,6 +9,7 @@ pub mod intercom;
 pub mod docgen;
 pub mod dashboards;
 pub mod val_admin;
+pub mod val_ai;
 pub mod val_cross_sync;
 pub mod val_drive;
 pub mod val_sync;
@@ -57,6 +58,9 @@ pub fn list_tools() -> Vec<Tool> {
 
     // VAL admin authoring tools (spaces / zones / tables)
     tools.extend(val_admin::tools());
+
+    // VAL AI package — assign + generate + push S3 in one call
+    tools.extend(val_ai::tools());
 
     // VAL Drive — file/folder operations
     tools.extend(val_drive::tools());
@@ -183,6 +187,11 @@ pub async fn call_tool(name: &str, arguments: Value) -> ToolResult {
     // VAL Cross-Domain Sync
     if name == "sync-val-domain" || name == "get-val-sync-status" || name == "promote-val-resources" {
         return val_cross_sync::call(name, arguments).await;
+    }
+
+    // VAL AI package
+    if name == "sync-domain-ai-package" {
+        return val_ai::call(name, arguments).await;
     }
 
     // Workflow authoring tools
@@ -389,7 +398,7 @@ mod tests {
     #[test]
     fn apollo_tools_registered() {
         let names = tool_names();
-        let expected = ["apollo-search-people"];
+        let expected = ["apollo-search-people", "apollo-enrich-person"];
         for name in expected {
             assert!(names.contains(name), "Missing Apollo tool: {}", name);
         }

@@ -2,12 +2,25 @@
 // Search Apollo.io for prospects — exposed to Claude Code via MCP
 
 use crate::modules::apollo::api::ApolloClient;
-use crate::modules::apollo::types::ApolloSearchFilters;
+use crate::modules::apollo::types::{ApolloEnrichResponse, ApolloSearchFilters};
 use crate::server::protocol::{InputSchema, Tool, ToolResult};
 use serde_json::{json, Value};
 
 pub fn tools() -> Vec<Tool> {
     vec![
+        Tool {
+            name: "apollo-enrich-person".to_string(),
+            description: "Enrich a single Apollo person by ID via /v1/people/match — unmasks full last name, verified email, phone, and other contact details that apollo-search-people withholds. Costs 1 enrichment credit per call. Use this after apollo-search-people to flesh out prioritized prospects.".to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "person_id": {
+                        "type": "string",
+                        "description": "Apollo person ID returned by apollo-search-people (e.g. \"5b188731a6da98cbfa5c8d2c\")."
+                    }
+                }),
+                vec!["person_id".to_string()],
+            ),
+        },
         Tool {
             name: "apollo-search-people".to_string(),
             description: "Search Apollo.io for people matching filters. Free — does not consume credits. Returns names, titles, companies, LinkedIn URLs but NOT emails/phones (need enrichment for those).".to_string(),
@@ -78,6 +91,22 @@ pub fn tools() -> Vec<Tool> {
 
 pub async fn call(name: &str, arguments: Value) -> ToolResult {
     match name {
+        "apollo-enrich-person" => {
+            let person_id = match arguments.get("person_id").and_then(|v| v.as_str()) {
+                Some(s) if !s.is_empty() => s.to_string(),
+                _ => return ToolResult::error("Missing required field: person_id".to_string()),
+            };
+
+            let client = match ApolloClient::new() {
+                Ok(c) => c,
+                Err(e) => return ToolResult::error(format!("Failed to init Apollo client: {}", e)),
+            };
+
+            match client.enrich_person(&person_id).await {
+                Ok(response) => ToolResult::text(build_enrich_summary(&response)),
+                Err(e) => ToolResult::error(format!("Apollo enrich failed: {}", e)),
+            }
+        }
         "apollo-search-people" => {
             let filters = ApolloSearchFilters {
                 person_titles: extract_string_array(&arguments, "person_titles"),
@@ -130,6 +159,89 @@ fn extract_string_array(args: &Value, key: &str) -> Option<Vec<String>> {
                 .filter_map(|x| x.as_str().map(|s| s.to_string()))
                 .collect()
         })
+}
+
+/// Build a human-readable summary of an Apollo enrichment response.
+/// Highlights the fields that search results withhold: full name, verified
+/// email, phone, plus the supporting profile info.
+fn build_enrich_summary(response: &ApolloEnrichResponse) -> String {
+    use std::fmt::Write;
+
+    let p = &response.person;
+    let mut out = String::new();
+
+    let display_name = p
+        .name
+        .clone()
+        .or_else(|| match (&p.first_name, &p.last_name) {
+            (Some(f), Some(l)) => Some(format!("{} {}", f, l)),
+            (Some(f), None) => Some(f.clone()),
+            (None, Some(l)) => Some(l.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| "Unknown".to_string());
+
+    let _ = writeln!(out, "### {} (enriched)", display_name);
+    let _ = writeln!(out, "- **Apollo ID:** {}", p.id);
+
+    if let Some(ref title) = p.title {
+        let _ = writeln!(out, "- **Title:** {}", title);
+    }
+    if let Some(ref seniority) = p.seniority {
+        let _ = writeln!(out, "- **Seniority:** {}", seniority);
+    }
+
+    match (&p.email, &p.email_status) {
+        (Some(e), Some(s)) if !e.is_empty() => {
+            let _ = writeln!(out, "- **Email:** {} ({})", e, s);
+        }
+        (Some(e), None) if !e.is_empty() => {
+            let _ = writeln!(out, "- **Email:** {}", e);
+        }
+        _ => {
+            let _ = writeln!(out, "- **Email:** _not available_");
+        }
+    }
+
+    if let Some(ref phones) = p.phone_numbers {
+        if !phones.is_empty() {
+            for phone in phones {
+                let number = phone
+                    .sanitized_number
+                    .as_deref()
+                    .or(phone.raw_number.as_deref())
+                    .unwrap_or("?");
+                let kind = phone.phone_type.as_deref().unwrap_or("phone");
+                let _ = writeln!(out, "- **Phone ({}):** {}", kind, number);
+            }
+        }
+    }
+
+    if let Some(ref linkedin) = p.linkedin_url {
+        let _ = writeln!(out, "- **LinkedIn:** {}", linkedin);
+    }
+
+    if let Some(ref city) = p.city {
+        let _ = write!(out, "- **Location:** {}", city);
+        if let Some(ref country) = p.country {
+            let _ = write!(out, ", {}", country);
+        }
+        let _ = writeln!(out);
+    }
+
+    if let Some(ref org) = p.organization {
+        if let Some(ref name) = org.name {
+            let _ = writeln!(out, "- **Company:** {}", name);
+        }
+        if let Some(ref website) = org.website_url {
+            let _ = writeln!(out, "- **Website:** {}", website);
+        }
+        if let Some(ref industry) = org.industry {
+            let _ = writeln!(out, "- **Industry:** {}", industry);
+        }
+    }
+
+    out
 }
 
 /// Build a human-readable summary of Apollo search results

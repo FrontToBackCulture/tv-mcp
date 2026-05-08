@@ -284,7 +284,20 @@ pub async fn update_table(domain: &str, table_id: &str, updates: Value) -> CmdRe
     if !updates.is_object() {
         return Err(CommandError::Config("'updates' must be an object".to_string()));
     }
-    let mut repo_table = updates;
+    // val-services updateRepoTable runs a literal SQL UPDATE that writes EVERY
+    // column on `repoTable` — any key the caller omits gets persisted as the
+    // literal string "undefined" (same backend pattern as update_linkage,
+    // update_zone, update_space). Fetch the current row and overlay the
+    // caller's updates so partial payloads are safe.
+    let current = get_table(domain, table_id).await?;
+    let mut repo_table = current;
+    if let (Some(merged_obj), Some(updates_obj)) =
+        (repo_table.as_object_mut(), updates.as_object())
+    {
+        for (k, v) in updates_obj {
+            merged_obj.insert(k.clone(), v.clone());
+        }
+    }
     if let Some(obj) = repo_table.as_object_mut() {
         // val-services /api/v1/tables/update needs three identifying fields:
         //   - `table_name` and `value` — the physical custom_tbl_<repo>_<id>
@@ -296,7 +309,6 @@ pub async fn update_table(domain: &str, table_id: &str, updates: Value) -> CmdRe
         obj.entry("table_name".to_string())
             .or_insert_with(|| Value::String(table_id.to_string()));
         if !obj.contains_key("id") {
-            // Extract trailing numeric id from custom_tbl_<repo>_<id>
             if let Some(numeric) = table_id.rsplit('_').next() {
                 if let Ok(n) = numeric.parse::<i64>() {
                     obj.insert("id".to_string(), Value::Number(n.into()));

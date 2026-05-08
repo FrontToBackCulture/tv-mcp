@@ -251,9 +251,12 @@ pub fn tools() -> Vec<Tool> {
             name: "update-val-table".to_string(),
             description:
                 "Update an existing VAL table's metadata (display name, prefix, repo_type, \
-                 autocalculate, populated_dates, metadata, tags). Pass `updates` with the fields \
-                 to change. **For tags:** pass `tags` as a top-level array of strings in \
-                 `updates` (e.g. `{ \"tags\": [\"foo\", \"bar\"] }`). Stored under \
+                 autocalculate, populated_dates, metadata, tags). Pass `updates` with ONLY the \
+                 fields to change — partial updates are safe (the wrapper fetches the current \
+                 row and merges your changes on top before sending, since val-services \
+                 updateRepoTable would otherwise persist any omitted column as the literal \
+                 string \"undefined\"). **For tags:** pass `tags` as a top-level array of \
+                 strings in `updates` (e.g. `{ \"tags\": [\"foo\", \"bar\"] }`). Stored under \
                  `metadata.tags` server-side. Pass `[]` to clear all tags. Does NOT modify \
                  columns/fields — use `update-val-field` and `add-val-table-field(s)` for \
                  column changes."

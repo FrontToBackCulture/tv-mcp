@@ -11,6 +11,7 @@ pub mod notifications;
 pub mod qbo;
 pub mod tools;
 pub mod val_admin;
+pub mod val_ai;
 pub mod val_cross_sync;
 pub mod val_sync;
 pub mod whatsapp;

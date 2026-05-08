@@ -131,6 +131,8 @@ fn categorize(name: &str) -> &'static str {
         "VAL SQL"
     } else if name == "execute-supabase-sql" {
         "Supabase SQL"
+    } else if name == "sync-domain-ai-package" {
+        "VAL AI Package"
     } else if name == "list-val-dashboards"
         || name == "get-val-dashboard"
         || name == "create-val-dashboard"
@@ -219,6 +221,7 @@ fn source_file_for(name: &str) -> &'static str {
             "src/server/tools/val_cross_sync.rs",
         "VAL SQL" => "src/server/tools/val_sync.rs",
         "Supabase SQL" => "src/server/tools/val_sync.rs",
+        "VAL AI Package" => "src/server/tools/val_ai.rs",
         "VAL Admin" if matches!(name,
             "create-val-workflow" | "update-val-workflow" | "execute-val-workflow"
             | "list-val-workflow-plugins" | "get-val-workflow-plugin-schema"
