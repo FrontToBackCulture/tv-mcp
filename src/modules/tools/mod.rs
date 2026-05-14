@@ -4,3 +4,4 @@ pub mod gamma;
 pub mod nanobanana;
 pub mod docgen;
 pub mod intercom;
+pub mod seedance;

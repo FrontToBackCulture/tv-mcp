@@ -4,6 +4,7 @@
 use crate::core::settings::{settings_get_key, KEY_GAMMA_API, KEY_GEMINI_API};
 use crate::modules::tools::gamma::{self, GammaGenerationOptions, ImageOptions, TextOptions};
 use crate::modules::tools::nanobanana::{self, NanobananOptions, ReferenceImage};
+use crate::modules::tools::seedance;
 use crate::server::protocol::{InputSchema, Tool, ToolResult};
 use serde_json::{json, Value};
 
@@ -78,6 +79,53 @@ pub fn tools() -> Vec<Tool> {
             name: "nanobanana-list-models".to_string(),
             description: "List available image generation models.".to_string(),
             input_schema: InputSchema::empty(),
+        },
+        // Seedance (video generation via OpenRouter)
+        Tool {
+            name: "seedance-create-config".to_string(),
+            description: "Create a .seedance.json sidecar next to a markdown file. If `prompt` is omitted, the markdown is distilled into a cinematic video prompt via Anthropic (Sonnet). The sidecar drives `seedance-render`.".to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "md_path": { "type": "string", "description": "Absolute path to the source markdown file (required)" },
+                    "prompt": { "type": "string", "description": "Override the auto-distilled prompt with your own text" },
+                    "model": { "type": "string", "description": "Seedance model id (default: bytedance/seedance-2.0-fast). Use bytedance/seedance-2.0 for higher quality." },
+                    "aspect_ratio": { "type": "string", "description": "16:9 | 9:16 | 1:1 | 4:3 | 3:4 | 21:9 | 9:21 (default: 16:9)" },
+                    "duration": { "type": "integer", "description": "Seconds (default: 5). Cost scales with duration." },
+                    "generate_audio": { "type": "boolean", "description": "Generate audio track (default: true)" }
+                }),
+                vec!["md_path".to_string()],
+            ),
+        },
+        Tool {
+            name: "seedance-render".to_string(),
+            description: "Synchronously render a video from a .seedance.json sidecar. Submits to OpenRouter, polls until complete, and saves <stem>.mp4 next to the sidecar. Blocks until done (default 10 min cap).".to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "config_path": { "type": "string", "description": "Absolute path to the .seedance.json sidecar (required)" },
+                    "timeout_secs": { "type": "integer", "description": "Max seconds to wait (default: 600)" }
+                }),
+                vec!["config_path".to_string()],
+            ),
+        },
+        Tool {
+            name: "seedance-submit".to_string(),
+            description: "Submit a video job to OpenRouter without polling. Returns the job id. Use seedance-poll afterwards.".to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "config_path": { "type": "string", "description": "Absolute path to the .seedance.json sidecar (required)" }
+                }),
+                vec!["config_path".to_string()],
+            ),
+        },
+        Tool {
+            name: "seedance-poll".to_string(),
+            description: "Poll the status of a Seedance job by id. Returns status + video URLs when completed.".to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "job_id": { "type": "string", "description": "Seedance job id from seedance-submit (required)" }
+                }),
+                vec!["job_id".to_string()],
+            ),
         },
     ]
 }
@@ -215,6 +263,74 @@ pub async fn call(name: &str, args: Value) -> ToolResult {
         "nanobanana-list-models" => {
             let models = nanobanana::nanobanana_list_models();
             ToolResult::json(&models)
+        }
+
+        // Seedance (video generation via OpenRouter)
+        "seedance-create-config" => {
+            let md_path = match args.get("md_path").and_then(|v| v.as_str()) {
+                Some(p) => p.to_string(),
+                None => return ToolResult::error("md_path is required".to_string()),
+            };
+            let prompt = args.get("prompt").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let model = args.get("model").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let aspect_ratio = args.get("aspect_ratio").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let duration = args.get("duration").and_then(|v| v.as_u64()).map(|n| n as u32);
+            let generate_audio = args.get("generate_audio").and_then(|v| v.as_bool());
+
+            match seedance::create_config(
+                &md_path,
+                prompt,
+                model,
+                aspect_ratio,
+                duration,
+                generate_audio,
+            )
+            .await
+            {
+                Ok(config_path) => ToolResult::json(&json!({
+                    "success": true,
+                    "config_path": config_path,
+                    "message": "Sidecar written. Use seedance-render to generate the video."
+                })),
+                Err(e) => ToolResult::error(e.to_string()),
+            }
+        }
+        "seedance-render" => {
+            let config_path = match args.get("config_path").and_then(|v| v.as_str()) {
+                Some(p) => p.to_string(),
+                None => return ToolResult::error("config_path is required".to_string()),
+            };
+            let timeout_secs = args.get("timeout_secs").and_then(|v| v.as_u64());
+
+            match seedance::render(&config_path, timeout_secs).await {
+                Ok(result) => ToolResult::json(&json!({
+                    "success": true,
+                    "job_id": result.job_id,
+                    "saved_path": result.saved_path,
+                    "status": result.status,
+                })),
+                Err(e) => ToolResult::error(e.to_string()),
+            }
+        }
+        "seedance-submit" => {
+            let config_path = match args.get("config_path").and_then(|v| v.as_str()) {
+                Some(p) => p.to_string(),
+                None => return ToolResult::error("config_path is required".to_string()),
+            };
+            match seedance::submit(&config_path).await {
+                Ok(job) => ToolResult::json(&job),
+                Err(e) => ToolResult::error(e.to_string()),
+            }
+        }
+        "seedance-poll" => {
+            let job_id = match args.get("job_id").and_then(|v| v.as_str()) {
+                Some(p) => p.to_string(),
+                None => return ToolResult::error("job_id is required".to_string()),
+            };
+            match seedance::poll(&job_id).await {
+                Ok(job) => ToolResult::json(&job),
+                Err(e) => ToolResult::error(e.to_string()),
+            }
         }
 
         _ => ToolResult::error(format!("Unknown generation tool: {}", name)),

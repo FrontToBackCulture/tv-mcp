@@ -19,12 +19,124 @@ pub enum ValApiError {
 impl fmt::Display for ValApiError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ValApiError::Http { status, body } => write!(f, "HTTP {}: {}", status, body),
+            ValApiError::Http { status, body } => {
+                write!(f, "HTTP {}: {}", status, pretty_error_body(body))
+            }
             ValApiError::Network(msg) => write!(f, "Network error: {}", msg),
             ValApiError::Parse(msg) => write!(f, "Parse error: {}", msg),
             ValApiError::AuthExpired => write!(f, "Authentication expired"),
         }
     }
+}
+
+/// Render a val-services error body in a human-readable form for tool callers.
+///
+/// val-services and the downstream microservices return errors in several
+/// shapes — Fastify's default `{ statusCode, error, message }`, the integration
+/// service's `handleRouteError` shape `{ error, operation, statusCode, timestamp }`,
+/// and the middleware fallback `{ message }`. Dumping the raw JSON makes tool
+/// errors hard to read at a glance. This helper extracts the useful fields and
+/// preserves the raw body when the shape is unfamiliar.
+///
+/// Note: many val-services endpoints intentionally mask `err.message` to
+/// "Internal Server Error" when `NODE_ENV` isn't `development`. This helper
+/// surfaces whatever the server *did* return — it can't recover information
+/// stripped server-side.
+fn pretty_error_body(body: &str) -> String {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return "(empty response body)".to_string();
+    }
+    let v: Value = match serde_json::from_str(trimmed) {
+        Ok(v) => v,
+        Err(_) => return body.to_string(),
+    };
+    if !v.is_object() {
+        return body.to_string();
+    }
+
+    // Walk the body for the deepest useful human-readable message. val-services
+    // returns errors in at least five shapes:
+    //   - Fastify default: { statusCode, error, message }
+    //   - handleRouteError: { error, operation, statusCode, timestamp }
+    //   - Forwarded FB Graph: { error: { message, code, type, fbtrace_id } }
+    //   - Errors envelope: { errors: [{ message }] }
+    //   - Middleware fallback: { message }
+    // The pretty form: `[op] short: message — details: { ... }` when all three
+    // are present, degrading gracefully when fields are missing.
+    let operation = str_field(&v, "operation");
+    let error_field = v.get("error");
+    let message_field = v.get("message");
+
+    let (short, deep) = match error_field {
+        Some(Value::Object(_)) => {
+            // FB-Graph-style nested error envelope.
+            let nested = error_field.unwrap();
+            let nested_msg = str_field(nested, "message");
+            let nested_code = nested.get("code").and_then(|c| {
+                c.as_str().map(|s| s.to_string()).or_else(|| c.as_i64().map(|n| n.to_string()))
+            });
+            let nested_type = str_field(nested, "type");
+            let label = match (nested_type, nested_code) {
+                (Some(t), Some(c)) => Some(format!("{} ({})", t, c)),
+                (Some(t), None) => Some(t),
+                (None, Some(c)) => Some(format!("code {}", c)),
+                _ => None,
+            };
+            (label, nested_msg.or_else(|| str_field(&v, "message")))
+        }
+        Some(Value::String(_)) => {
+            let e = str_field(&v, "error");
+            let m = str_field(&v, "message");
+            // Avoid "X: X" when error and message are identical strings.
+            match (&e, &m) {
+                (Some(a), Some(b)) if a == b => (e, None),
+                _ => (e, m),
+            }
+        }
+        _ => {
+            // Try `errors: [...]` array envelope.
+            let from_arr = v.get("errors").and_then(|e| e.as_array()).and_then(|arr| {
+                arr.first().and_then(|first| {
+                    str_field(first, "message")
+                        .or_else(|| str_field(first, "error"))
+                })
+            });
+            let m = from_arr
+                .or_else(|| message_field.and_then(|x| x.as_str().map(|s| s.to_string())));
+            (None, m)
+        }
+    };
+
+    let primary = match (short, deep) {
+        (Some(s), Some(d)) if !s.is_empty() && !d.is_empty() && s != d => format!("{}: {}", s, d),
+        (Some(s), _) if !s.is_empty() => s,
+        (_, Some(d)) if !d.is_empty() => d,
+        _ => return body.to_string(),
+    };
+    let mut out = match operation {
+        Some(op) if !op.is_empty() => format!("[{}] {}", op, primary),
+        _ => primary,
+    };
+    let details = v.get("details").or_else(|| v.get("data"));
+    if let Some(d) = details {
+        if !d.is_null() {
+            if let Ok(s) = serde_json::to_string(d) {
+                if s != "null" && s != "{}" && s != "[]" {
+                    out.push_str(" — details: ");
+                    out.push_str(&s);
+                }
+            }
+        }
+    }
+    out
+}
+
+fn str_field(v: &Value, key: &str) -> Option<String> {
+    v.get(key)
+        .and_then(|x| x.as_str())
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty())
 }
 
 impl ValApiError {

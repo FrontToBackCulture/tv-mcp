@@ -863,6 +863,84 @@ pub fn tools() -> Vec<Tool> {
             ),
         },
         Tool {
+            name: "list-val-integration-filters".to_string(),
+            description:
+                "List the filter descriptors a connector exposes for a given option \
+                 (e.g. instagram + media → page_id, ig_user_id, ig_media_id, since, until). \
+                 Each descriptor is a filter row in the integration UI: \
+                 `{ column_name, name, data_type, type, required, depends_on, value/url/function }`. \
+                 \
+                 **Use this before `get-val-integration-filter-values`** to discover which filter \
+                 IDs to load and their dependency order — e.g. `ig_user_id` has \
+                 `depends_on: ['page_id']`, so `page_id` must be resolved first and its value \
+                 fed back as `queryParams` on the dependent call. \
+                 \
+                 **Required for FB-stack connectors** (facebook, instagram, linkedin, google ads, \
+                 ...): `test-val-integration` / `save-val-integration` need a Page Access Token \
+                 that only the filter loaders can mint — there's no other way to obtain it from \
+                 outside the integration service."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "identifier": {
+                        "type": "string",
+                        "description": "Connector slug, e.g. 'instagram', 'facebook', 'linkedin', 'googleads'."
+                    },
+                    "optionId": {
+                        "type": "string",
+                        "description": "Connector option id, e.g. 'media', 'insights', 'campaigns'. Comes from the connector's options manifest."
+                    }
+                }),
+                vec!["domain".to_string(), "identifier".to_string(), "optionId".to_string()],
+            ),
+        },
+        Tool {
+            name: "get-val-integration-filter-values".to_string(),
+            description:
+                "Resolve a single filter's live values by running its server-side loader \
+                 (e.g. fetch the FB pages a user manages, the IG business accounts behind a \
+                 page, the media items in an IG account). \
+                 \
+                 **Critical for FB-stack auth flows:** the `page_id` filter response includes \
+                 a `token` (Page Access Token) and `selectedValue` per item — both are required \
+                 in downstream `test-val-integration` / `save-val-integration` payloads. \
+                 \
+                 **Dependent filters:** when the descriptor (from `list-val-integration-filters`) \
+                 has `depends_on`, pass each prior selection as a key in `queryParams`. The \
+                 expected value for each key is the *full selected row object* from the prior \
+                 call, not just the id — e.g. `queryParams: { page_id: <full page object> }` \
+                 when resolving `ig_user_id`. The tool JSON-stringifies and forwards `queryParams` \
+                 as `?queryParams=<json>` to val-services."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "identifier": {
+                        "type": "string",
+                        "description": "Connector slug, e.g. 'instagram'."
+                    },
+                    "optionId": {
+                        "type": "string",
+                        "description": "Connector option id, e.g. 'media'."
+                    },
+                    "filterId": {
+                        "type": "string",
+                        "description": "Filter to resolve, e.g. 'page_id', 'ig_user_id', 'ig_media_id'. Comes from `list-val-integration-filters[].column_name`."
+                    },
+                    "queryParams": {
+                        "description": "Optional. Prior filter selections required by `depends_on`. Three accepted shapes — the wrapper reshapes all of them to val-services' canonical array form internally:\n\n  1. Object keyed by filter id (recommended for multi-dep): `{ page_id: <prior page row>, ig_user_id: <prior ig_user row> }`. The wrapper extracts `row.value ?? row.selectedValue ?? row.id` from each prior row and carries `data_type` / `valueType` through.\n  2. Pre-built canonical array: `[{column_name, value, data_type?, valueType?}, ...]`. Use this if you already have val-services' constructQuery shape.\n  3. Single canonical entry (single-dep, back-compat with pre-multi-dep callers): `{column_name, value, ...}`.\n\nA JSON string wrapping any of the above is also accepted, since some MCP clients stringify object-valued args.\n\n**FB-stack `page_id` auto-pack:** the val-services preProcessors `JSON.parse(page_id)` and expect `{selectedValue, token}`. When the prior row has `token` plus `selectedValue`/`id`, the wrapper auto-packs the value as `JSON.stringify({selectedValue, token})` — no need to stringify by hand. Pass the prior row verbatim from `list-val-integration-filters` and it just works. If you've already pre-packed `value` to a JSON string, the wrapper detects that and leaves it alone."
+                    }
+                }),
+                vec![
+                    "domain".to_string(),
+                    "identifier".to_string(),
+                    "optionId".to_string(),
+                    "filterId".to_string(),
+                ],
+            ),
+        },
+        Tool {
             name: "save-val-integration".to_string(),
             description:
                 "Save an integration table config — wires a connector to a target VAL table with \
@@ -888,7 +966,19 @@ pub fn tools() -> Vec<Tool> {
                 "Pre-flight test of a connector configuration — verifies auth + that the \
                  mappings produce a sensible row sample without persisting. Run before \
                  `extract-val-integration` to catch misconfiguration. Body shape mirrors \
-                 `save-val-integration` payload."
+                 `save-val-integration` payload. \
+                 \
+                 **`body.fields` shape:** val-services keys field selection on \
+                 `[{column, path}, ...]` and silently returns empty rows otherwise. This \
+                 wrapper normalizes simpler caller inputs — pass `[\"col1\", \"col2\"]` \
+                 (expanded to `[{column: 'col1', path: 'col1'}, ...]`) or use the canonical \
+                 object form. `{column_name: x}` is mirrored to `{column: x}` automatically. \
+                 \
+                 **`body.values[].page_id` auto-pack:** for FB-stack connectors the \
+                 preProcessors `JSON.parse(page_id)` and expect `{selectedValue, token}`. \
+                 When a `values` entry has `column_name === 'page_id'` plus `token` and \
+                 `selectedValue`/`id`, the wrapper auto-packs `value` to the JSON string \
+                 shape val-services needs."
                     .to_string(),
             input_schema: InputSchema::with_properties(
                 json!({
@@ -1399,6 +1489,36 @@ pub async fn call(name: &str, args: Value) -> ToolResult {
             match val_admin::get_integration_fields(&domain, filters).await {
                 Ok(v) => ToolResult::json(&v),
                 Err(e) => ToolResult::error(format!("get-val-integration-fields failed: {}", e)),
+            }
+        }
+
+        "list-val-integration-filters" => {
+            let domain = require_str!(args, "domain");
+            let identifier = require_str!(args, "identifier");
+            let option_id = require_str!(args, "optionId");
+            match val_admin::list_integration_filters(&domain, &identifier, &option_id).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("list-val-integration-filters failed: {}", e)),
+            }
+        }
+
+        "get-val-integration-filter-values" => {
+            let domain = require_str!(args, "domain");
+            let identifier = require_str!(args, "identifier");
+            let option_id = require_str!(args, "optionId");
+            let filter_id = require_str!(args, "filterId");
+            let query_params = args.get("queryParams").cloned();
+            match val_admin::get_integration_filter_values(
+                &domain,
+                &identifier,
+                &option_id,
+                &filter_id,
+                query_params,
+            )
+            .await
+            {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("get-val-integration-filter-values failed: {}", e)),
             }
         }
 

@@ -16,7 +16,7 @@ use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region};
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{Delete, ObjectIdentifier};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -25,6 +25,7 @@ use crate::core::error::{CmdResult, CommandError};
 use crate::core::settings::{
     load_settings, KEY_AWS_ACCESS_KEY_ID, KEY_AWS_SECRET_ACCESS_KEY, KEY_KNOWLEDGE_PATH,
 };
+use crate::core::supabase::get_client;
 use crate::modules::val_sync::config::get_domain_config;
 
 const S3_BUCKET: &str = "production.thinkval.static";
@@ -137,10 +138,14 @@ pub async fn sync_domain_ai_package(
     }
 
     // ---- Assign ----
-    let before = read_ai_config(&ai_path).skills;
+    // Source of truth is `skills.domain` in Supabase. The on-disk
+    // `ai_config.json` is a derived snapshot, written below for visibility
+    // and for any tooling still reading the file.
+    let before = read_assigned_skills_from_supabase(&domain).await?;
     let after = apply_assignment(&before, &add, &remove, replace.as_deref());
     let added: Vec<String> = after.iter().filter(|s| !before.contains(s)).cloned().collect();
     let removed: Vec<String> = before.iter().filter(|s| !after.contains(s)).cloned().collect();
+    write_assignments_to_supabase(&domain, &after).await?;
     write_ai_config(&ai_path, &after)?;
 
     let assignments = AssignmentChange {
@@ -221,14 +226,112 @@ fn list_all_domain_slugs() -> Vec<String> {
 // Assign
 // ============================================================================
 
-fn read_ai_config(ai_path: &Path) -> DomainAiConfig {
-    let config_path = ai_path.join("ai_config.json");
-    match fs::read_to_string(&config_path) {
-        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
-        Err(_) => DomainAiConfig::default(),
+/// Read currently-assigned skill slugs for a domain from Supabase.
+/// Source of truth: `skills.domain` array column.
+async fn read_assigned_skills_from_supabase(domain: &str) -> CmdResult<Vec<String>> {
+    #[derive(Deserialize)]
+    struct Row {
+        slug: String,
     }
+    let client = get_client().await?;
+    let query = format!("select=slug&domain=cs.{{{}}}&order=slug.asc", domain);
+    let rows: Vec<Row> = client.select("skills", &query).await?;
+    Ok(rows.into_iter().map(|r| r.slug).collect())
 }
 
+/// Reconcile a domain's assigned skills in Supabase against the desired list.
+/// For slugs newly in the list, append the domain to `skills.domain`.
+/// For slugs no longer in the list, remove the domain from `skills.domain`.
+/// Slugs not present in the `skills` registry are silently skipped — they
+/// must be registered first via `register-skill`.
+async fn write_assignments_to_supabase(domain: &str, after: &[String]) -> CmdResult<()> {
+    #[derive(Deserialize, Clone)]
+    struct Row {
+        slug: String,
+        domain: Vec<String>,
+    }
+    let client = get_client().await?;
+
+    // Current rows assigned to this domain.
+    let current: Vec<Row> = client
+        .select(
+            "skills",
+            &format!("select=slug,domain&domain=cs.{{{}}}", domain),
+        )
+        .await?;
+
+    let current_slugs: HashSet<String> =
+        current.iter().map(|r| r.slug.clone()).collect();
+    let desired: HashSet<String> = after.iter().cloned().collect();
+
+    let to_add: Vec<&String> = after
+        .iter()
+        .filter(|s| !current_slugs.contains(*s))
+        .collect();
+    let to_remove: Vec<&Row> = current
+        .iter()
+        .filter(|r| !desired.contains(&r.slug))
+        .collect();
+
+    for slug in to_add {
+        // Read current domain[] to merge.
+        let row: Option<Row> = client
+            .select_single(
+                "skills",
+                &format!("select=slug,domain&slug=eq.{}", slug),
+            )
+            .await?;
+        let Some(existing) = row else {
+            // Slug not registered — skip rather than insert.
+            continue;
+        };
+        let mut next = existing.domain.clone();
+        if !next.iter().any(|d| d == domain) {
+            next.push(domain.to_string());
+        }
+        next.sort();
+        next.dedup();
+        update_skill_domain(&client, slug, &next).await?;
+    }
+
+    for row in to_remove {
+        let next: Vec<String> = row
+            .domain
+            .iter()
+            .filter(|d| d.as_str() != domain)
+            .cloned()
+            .collect();
+        update_skill_domain(&client, &row.slug, &next).await?;
+    }
+
+    Ok(())
+}
+
+async fn update_skill_domain(
+    client: &crate::core::supabase::SupabaseClient,
+    slug: &str,
+    domain: &[String],
+) -> CmdResult<()> {
+    let url = format!("{}/rest/v1/skills?slug=eq.{}", client.base_url(), slug);
+    let body = serde_json::json!({ "domain": domain });
+    let resp = client
+        .http_client()
+        .patch(&url)
+        .headers(client.auth_headers())
+        .json(&body)
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(CommandError::Http { status, body: text });
+    }
+    Ok(())
+}
+
+/// Write the on-disk `ai_config.json` snapshot. This is a derived artifact
+/// generated from the canonical Supabase `skills.domain` data — it exists
+/// for local visibility and for tooling that still reads the file.
 fn write_ai_config(ai_path: &Path, skills: &[String]) -> CmdResult<()> {
     let config = DomainAiConfig {
         skills: skills.to_vec(),

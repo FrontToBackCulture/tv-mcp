@@ -122,6 +122,8 @@ fn categorize(name: &str) -> &'static str {
         || name == "list-val-integration-tables"
         || name == "get-val-integration"
         || name == "get-val-integration-fields"
+        || name == "list-val-integration-filters"
+        || name == "get-val-integration-filter-values"
         || name == "save-val-integration"
         || name == "test-val-integration"
         || name == "extract-val-integration"

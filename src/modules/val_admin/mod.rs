@@ -1135,6 +1135,261 @@ pub async fn get_integration_fields(
     .await
 }
 
+// ============================================================================
+// Integration filters — filter descriptors + resolved filter values
+// ============================================================================
+//
+// The val-services middleware proxies these to the integration service:
+//   /db/integration/getIntegrationFilters            → /v1/integrations/{identifier}/options/{optionId}/filters
+//   /db/integration/getIntegrationFilters/:filterId  → /v1/integrations/{identifier}/options/{optionId}/filters/{filterId}
+//
+// FB/IG-stack connectors (facebook, instagram, linkedin, google ads, ...) gate
+// `test-val-integration` / `save-val-integration` on a Page Access Token that
+// only the filter loaders can produce server-side. The descriptors expose the
+// dependency graph (e.g. `ig_user_id` depends_on `page_id`); the value endpoint
+// runs each loader and returns the materialised list — items for `page_id`
+// include a `token` (PAT) and `selectedValue` that the downstream payload needs.
+
+pub async fn list_integration_filters(
+    domain: &str,
+    identifier: &str,
+    option_id: &str,
+) -> CmdResult<Value> {
+    if identifier.trim().is_empty() {
+        return Err(CommandError::Config(
+            "'identifier' (connector slug, e.g. 'instagram') cannot be empty".to_string(),
+        ));
+    }
+    if option_id.trim().is_empty() {
+        return Err(CommandError::Config(
+            "'optionId' (connector option, e.g. 'media') cannot be empty".to_string(),
+        ));
+    }
+    let query: Vec<(String, String)> = vec![
+        ("identifier".to_string(), identifier.to_string()),
+        ("optionId".to_string(), option_id.to_string()),
+    ];
+    get_json_with_query(
+        domain,
+        "list-val-integration-filters",
+        "/db/integration/getIntegrationFilters",
+        query,
+    )
+    .await
+}
+
+pub async fn get_integration_filter_values(
+    domain: &str,
+    identifier: &str,
+    option_id: &str,
+    filter_id: &str,
+    query_params: Option<Value>,
+) -> CmdResult<Value> {
+    if identifier.trim().is_empty() {
+        return Err(CommandError::Config(
+            "'identifier' (connector slug, e.g. 'instagram') cannot be empty".to_string(),
+        ));
+    }
+    if option_id.trim().is_empty() {
+        return Err(CommandError::Config(
+            "'optionId' (connector option, e.g. 'media') cannot be empty".to_string(),
+        ));
+    }
+    if filter_id.trim().is_empty() {
+        return Err(CommandError::Config(
+            "'filterId' (e.g. 'page_id', 'ig_user_id') cannot be empty".to_string(),
+        ));
+    }
+    let mut query: Vec<(String, String)> = vec![
+        ("identifier".to_string(), identifier.to_string()),
+        ("optionId".to_string(), option_id.to_string()),
+    ];
+    // val-services reads `?queryParams=<json>` and runs it through
+    // `integrationHelper.constructQuery` server-side. For multi-dep filters
+    // (e.g. `ig_media_id` needs both `page_id` and `ig_user_id`) the helper
+    // ONLY handles the array form `[{column_name, value, data_type, valueType}]`
+    // — the object-keyed form silently drops all but the first dep. We accept
+    // the simpler `{ filterId: priorRow }` shape from the caller and expand to
+    // the array form here.
+    if let Some(qp) = query_params {
+        let arr = build_query_params_array(qp)?;
+        if !arr.is_empty() {
+            let s = serde_json::to_string(&Value::Array(arr)).map_err(|e| {
+                CommandError::Config(format!("'queryParams' failed to JSON-encode: {}", e))
+            })?;
+            query.push(("queryParams".to_string(), s));
+        }
+    }
+    let path = format!("/db/integration/getIntegrationFilters/{}", filter_id);
+    get_json_with_query(
+        domain,
+        "get-val-integration-filter-values",
+        &path,
+        query,
+    )
+    .await
+}
+
+/// Reshape caller input into the array form `[{column_name, value, ...}, ...]`
+/// that val-services' `constructQuery` accepts for multi-dep filters.
+///
+/// Accepted top-level shapes:
+///   1. Object keyed by filter id (recommended): `{page_id: <prior row>, ig_user_id: <prior row>}`.
+///      Each row may be a full object (we extract value/selectedValue/id +
+///      data_type/valueType) or a bare scalar.
+///   2. Pre-built canonical array: `[{column_name, value, data_type?, valueType?}, ...]`.
+///   3. Single canonical entry: `{column_name, value, ...}` — the pre-multi-dep
+///      shape that worked single-dep against val-services directly. Kept for
+///      back-compat so prior calls don't break.
+///   4. A JSON string wrapping any of the above. Some MCP clients stringify
+///      object-valued args; we unwrap one layer before dispatching.
+fn build_query_params_array(qp: Value) -> CmdResult<Vec<Value>> {
+    // 4: stringified shape — unwrap once and recurse.
+    if let Value::String(s) = &qp {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            return Ok(Vec::new());
+        }
+        let parsed: Value = serde_json::from_str(trimmed).map_err(|e| {
+            CommandError::Config(format!(
+                "'queryParams' was a string but couldn't be parsed as JSON: {}. \
+                 Pass the value as a JSON object instead, e.g. {{ \"page_id\": <prior page row> }}.",
+                e
+            ))
+        })?;
+        return build_query_params_array(parsed);
+    }
+
+    match qp {
+        Value::Null => Ok(Vec::new()),
+
+        // 2: pre-built canonical array.
+        Value::Array(items) => {
+            for (i, item) in items.iter().enumerate() {
+                if !item.is_object() {
+                    return Err(CommandError::Config(format!(
+                        "'queryParams' array entry [{}] must be an object — \
+                         expected `{{column_name, value, data_type?, valueType?}}`.",
+                        i
+                    )));
+                }
+            }
+            Ok(items)
+        }
+
+        Value::Object(map) => {
+            if map.is_empty() {
+                return Ok(Vec::new());
+            }
+            // 3: single canonical entry — disambiguate from form 1 by detecting
+            // the canonical `column_name`+`value` keys at the top level. A real
+            // form-1 input is keyed by filter ids (e.g. `page_id`, `ig_user_id`),
+            // so collision is vanishingly unlikely.
+            if map.contains_key("column_name") && map.contains_key("value") {
+                return Ok(vec![Value::Object(map)]);
+            }
+            // 1: object keyed by filter id.
+            let mut arr = Vec::with_capacity(map.len());
+            for (filter_id, row) in map.into_iter() {
+                arr.push(prior_row_to_entry(&filter_id, row));
+            }
+            Ok(arr)
+        }
+
+        _ => Err(CommandError::Config(
+            "'queryParams' must be one of:\n  \
+              - object keyed by filter id (form 1, recommended): \
+                `{page_id: <prior page row>, ig_user_id: <prior ig_user row>}`\n  \
+              - array of canonical entries (form 2): \
+                `[{column_name, value, data_type?, valueType?}, ...]`\n  \
+              - single canonical entry (form 3, single-dep only): \
+                `{column_name, value, ...}`\n\
+             A JSON string wrapping any of the above is also accepted."
+                .to_string(),
+        )),
+    }
+}
+
+fn prior_row_to_entry(filter_id: &str, row: Value) -> Value {
+    // Caller hands us either the full prior filter row (object) or a bare value
+    // (string/number). For an object, prefer the explicit `value` field, then
+    // `selectedValue` (returned by the FB-stack page loader), then `id`. Carry
+    // `data_type` and `valueType` through if present so constructQuery's
+    // dynamic-value path (date formulas) still works.
+    if let Value::Object(map) = &row {
+        // FB-stack `page_id` is its own contract: val-services' integration
+        // preProcessors call `JSON.parse(page_id)` and expect
+        // `{ selectedValue, token }`. Without this auto-pack the caller has
+        // to JSON.stringify by hand every time and `row.value` (typically the
+        // page's display name) silently produces wrong downstream behaviour.
+        if let Some(packed) = pack_fb_page_value(filter_id, map) {
+            let mut entry = json!({
+                "column_name": filter_id,
+                "value": packed,
+            });
+            if let Some(dt) = map.get("data_type") {
+                entry["data_type"] = dt.clone();
+            }
+            if let Some(vt) = map.get("valueType") {
+                entry["valueType"] = vt.clone();
+            }
+            return entry;
+        }
+
+        let value = map
+            .get("value")
+            .or_else(|| map.get("selectedValue"))
+            .or_else(|| map.get("id"))
+            .cloned()
+            .unwrap_or(Value::Null);
+        let mut entry = json!({
+            "column_name": filter_id,
+            "value": value,
+        });
+        if let Some(dt) = map.get("data_type") {
+            entry["data_type"] = dt.clone();
+        }
+        if let Some(vt) = map.get("valueType") {
+            entry["valueType"] = vt.clone();
+        }
+        entry
+    } else {
+        json!({
+            "column_name": filter_id,
+            "value": row,
+        })
+    }
+}
+
+/// FB-stack `page_id` (facebook, instagram, linkedin, google ads, ...) is the
+/// only filter whose downstream consumer (`JSON.parse(page_id)` in the
+/// preProcessors) expects a JSON-stringified `{selectedValue, token}` instead
+/// of a bare value. Detect that shape — row has both `token` and one of
+/// `selectedValue`/`id` — and return the packed string. Returns `None` for
+/// anything else, including a `page_id` row that already has `value` set to a
+/// JSON string (caller has pre-packed; don't double-encode).
+fn pack_fb_page_value(filter_id: &str, row: &serde_json::Map<String, Value>) -> Option<String> {
+    if filter_id != "page_id" {
+        return None;
+    }
+    // Caller already JSON-stringified into `value` themselves — leave alone.
+    if let Some(Value::String(s)) = row.get("value") {
+        if s.trim_start().starts_with('{') {
+            return None;
+        }
+    }
+    let token = row.get("token").and_then(|t| t.as_str())?;
+    let selected = row
+        .get("selectedValue")
+        .or_else(|| row.get("id"))
+        .cloned()?;
+    serde_json::to_string(&json!({
+        "selectedValue": selected,
+        "token": token,
+    }))
+    .ok()
+}
+
 pub async fn save_integration(domain: &str, settings: Value) -> CmdResult<Value> {
     if !settings.is_object() {
         return Err(CommandError::Config(
@@ -1170,7 +1425,73 @@ pub async fn test_integration(domain: &str, body: Value) -> CmdResult<Value> {
             "'body' must be an object — typically { settings, payload } depending on connector".to_string(),
         ));
     }
+    let body = normalize_test_integration_body(body);
     post_json(domain, "test-val-integration", "/db/integration/test", body).await
+}
+
+/// val-services' `returnDataWithFieldsSelected` does
+/// `_.find(fieldsSelected, { column: key })` and writes `accum[found.path] = ...`
+/// — so `fields` MUST be `[{column, path}, ...]`. The natural shorthand
+/// `["col1", "col2"]` silently produces empty rows because no `{column}` match
+/// is found. Expand bare-string entries to `{column: c, path: c}` here so
+/// callers don't have to remember the dual-key contract.
+///
+/// Also auto-packs `body.values[]` entries whose `column_name === "page_id"`
+/// (or `column === "page_id"`) into the `JSON.stringify({selectedValue, token})`
+/// shape that val-services' FB-stack preProcessors expect — same trap as the
+/// queryParams path.
+fn normalize_test_integration_body(mut body: Value) -> Value {
+    if let Some(obj) = body.as_object_mut() {
+        if let Some(fields) = obj.get_mut("fields") {
+            if let Some(arr) = fields.as_array_mut() {
+                for item in arr.iter_mut() {
+                    match item {
+                        Value::String(s) => {
+                            let col = s.clone();
+                            *item = json!({ "column": col, "path": col });
+                        }
+                        Value::Object(map) => {
+                            // Common caller mistake: `{column_name, ...}` instead
+                            // of `{column, ...}`. Mirror column_name → column when
+                            // only the former is present. Path defaults to column
+                            // unless explicitly set.
+                            if !map.contains_key("column") {
+                                if let Some(v) = map.get("column_name").cloned() {
+                                    map.insert("column".to_string(), v);
+                                }
+                            }
+                            if !map.contains_key("path") {
+                                if let Some(v) = map.get("column").cloned() {
+                                    map.insert("path".to_string(), v);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        if let Some(values) = obj.get_mut("values") {
+            if let Some(arr) = values.as_array_mut() {
+                for item in arr.iter_mut() {
+                    if let Some(map) = item.as_object_mut() {
+                        let col = map
+                            .get("column_name")
+                            .or_else(|| map.get("column"))
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
+                        if col.as_deref() == Some("page_id") {
+                            if let Some(packed) = pack_fb_page_value("page_id", map) {
+                                map.insert("value".to_string(), Value::String(packed));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    body
 }
 
 pub async fn extract_integration(domain: &str, body: Value) -> CmdResult<Value> {
@@ -1186,4 +1507,274 @@ pub async fn extract_integration(domain: &str, body: Value) -> CmdResult<Value> 
         body,
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // Each test name traces back to a row in the bug report's input table.
+
+    #[test]
+    fn form1_full_row_with_token() {
+        let qp = json!({
+            "page_id": {"column_name": "page_id", "value": "1057513914104696", "token": "EAA..."}
+        });
+        let arr = build_query_params_array(qp).expect("form 1 with full row should parse");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["column_name"], "page_id");
+        assert_eq!(arr[0]["value"], "1057513914104696");
+    }
+
+    #[test]
+    fn form1_minimal_row() {
+        let qp = json!({
+            "page_id": {"value": "1057513914104696", "token": "EAA..."}
+        });
+        let arr = build_query_params_array(qp).expect("form 1 minimal row should parse");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["column_name"], "page_id");
+        assert_eq!(arr[0]["value"], "1057513914104696");
+    }
+
+    #[test]
+    fn form1_scalar_value() {
+        let qp = json!({"page_id": "1057513914104696"});
+        let arr = build_query_params_array(qp).expect("form 1 scalar should parse");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["column_name"], "page_id");
+        assert_eq!(arr[0]["value"], "1057513914104696");
+    }
+
+    #[test]
+    fn form1_multi_dep() {
+        let qp = json!({
+            "page_id":    {"column_name": "page_id",    "value": "1057513914104696"},
+            "ig_user_id": {"column_name": "ig_user_id", "value": "17841480160011990"}
+        });
+        let arr = build_query_params_array(qp).expect("multi-dep should parse");
+        assert_eq!(arr.len(), 2);
+        let cols: std::collections::HashSet<&str> = arr
+            .iter()
+            .filter_map(|e| e["column_name"].as_str())
+            .collect();
+        assert!(cols.contains("page_id"));
+        assert!(cols.contains("ig_user_id"));
+    }
+
+    #[test]
+    fn form2_canonical_array() {
+        let qp = json!([
+            {"column_name": "page_id", "value": "1057513914104696"}
+        ]);
+        let arr = build_query_params_array(qp).expect("form 2 array should pass through");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["column_name"], "page_id");
+        assert_eq!(arr[0]["value"], "1057513914104696");
+    }
+
+    #[test]
+    fn form3_flat_canonical_entry() {
+        // Pre-multi-dep shape that worked single-dep against val-services.
+        let qp = json!({"column_name": "page_id", "value": "1057513914104696"});
+        let arr = build_query_params_array(qp).expect("form 3 flat entry should parse");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["column_name"], "page_id");
+        assert_eq!(arr[0]["value"], "1057513914104696");
+    }
+
+    #[test]
+    fn form4_json_stringified_object() {
+        let qp = json!(r#"{"page_id":"1057513914104696"}"#);
+        let arr = build_query_params_array(qp).expect("stringified form-1 should unwrap and parse");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["column_name"], "page_id");
+        assert_eq!(arr[0]["value"], "1057513914104696");
+    }
+
+    #[test]
+    fn form4_json_stringified_array() {
+        let qp = json!(r#"[{"column_name":"page_id","value":"1057513914104696"}]"#);
+        let arr = build_query_params_array(qp).expect("stringified form-2 should unwrap and parse");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["column_name"], "page_id");
+        assert_eq!(arr[0]["value"], "1057513914104696");
+    }
+
+    #[test]
+    fn null_yields_empty_array() {
+        let arr = build_query_params_array(Value::Null).unwrap();
+        assert!(arr.is_empty());
+    }
+
+    #[test]
+    fn empty_object_yields_empty_array() {
+        let arr = build_query_params_array(json!({})).unwrap();
+        assert!(arr.is_empty());
+    }
+
+    #[test]
+    fn scalar_input_rejected_with_clear_message() {
+        let err = build_query_params_array(json!(42))
+            .expect_err("bare scalar must be rejected");
+        let msg = format!("{:?}", err);
+        assert!(msg.contains("form 1"), "error should reference accepted forms; got: {}", msg);
+    }
+
+    #[test]
+    fn stringified_garbage_rejected() {
+        let err = build_query_params_array(json!("not valid json {"))
+            .expect_err("garbage string must be rejected");
+        let msg = format!("{:?}", err);
+        assert!(msg.contains("couldn't be parsed as JSON"), "got: {}", msg);
+    }
+
+    #[test]
+    fn array_entry_must_be_object() {
+        let err = build_query_params_array(json!(["page_id", "1057"]))
+            .expect_err("array of scalars must be rejected");
+        let msg = format!("{:?}", err);
+        assert!(msg.contains("entry [0]"), "should call out which index; got: {}", msg);
+    }
+
+    #[test]
+    fn prior_row_carries_data_type_and_value_type() {
+        let qp = json!({
+            "since": {"value": "2026-01-01", "data_type": "date", "valueType": "dynamic"}
+        });
+        let arr = build_query_params_array(qp).unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["data_type"], "date");
+        assert_eq!(arr[0]["valueType"], "dynamic");
+    }
+
+    // ---------- test-val-integration body.fields normalization ----------
+
+    #[test]
+    fn fields_strings_expand_to_column_path() {
+        let body = normalize_test_integration_body(json!({
+            "fields": ["likes", "comments"]
+        }));
+        let fields = body["fields"].as_array().unwrap();
+        assert_eq!(fields[0]["column"], "likes");
+        assert_eq!(fields[0]["path"], "likes");
+        assert_eq!(fields[1]["column"], "comments");
+        assert_eq!(fields[1]["path"], "comments");
+    }
+
+    #[test]
+    fn fields_column_name_mirrored_to_column() {
+        let body = normalize_test_integration_body(json!({
+            "fields": [{"column_name": "likes"}]
+        }));
+        let f = &body["fields"][0];
+        assert_eq!(f["column"], "likes");
+        assert_eq!(f["path"], "likes");
+    }
+
+    #[test]
+    fn fields_canonical_pass_through() {
+        let body = normalize_test_integration_body(json!({
+            "fields": [{"column": "likes", "path": "metrics.likes", "type": "concat"}]
+        }));
+        let f = &body["fields"][0];
+        assert_eq!(f["column"], "likes");
+        assert_eq!(f["path"], "metrics.likes");
+        assert_eq!(f["type"], "concat");
+    }
+
+    // ---------- page_id auto-pack for FB-stack preProcessors ----------
+
+    #[test]
+    fn page_id_queryparams_autopacked_with_token() {
+        let qp = json!({
+            "page_id": {
+                "name": "House of wellness",
+                "selectedValue": "1057513914104696",
+                "token": "EAA-fb-page-access-token"
+            }
+        });
+        let arr = build_query_params_array(qp).unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["column_name"], "page_id");
+        let packed = arr[0]["value"].as_str().expect("page_id value must be packed JSON string");
+        let parsed: Value = serde_json::from_str(packed).unwrap();
+        assert_eq!(parsed["selectedValue"], "1057513914104696");
+        assert_eq!(parsed["token"], "EAA-fb-page-access-token");
+    }
+
+    #[test]
+    fn page_id_queryparams_autopacked_from_id_alias() {
+        let qp = json!({
+            "page_id": {
+                "id": "1057513914104696",
+                "token": "EAA-fb-page-access-token"
+            }
+        });
+        let arr = build_query_params_array(qp).unwrap();
+        let parsed: Value = serde_json::from_str(arr[0]["value"].as_str().unwrap()).unwrap();
+        assert_eq!(parsed["selectedValue"], "1057513914104696");
+        assert_eq!(parsed["token"], "EAA-fb-page-access-token");
+    }
+
+    #[test]
+    fn page_id_queryparams_no_token_uses_normal_extraction() {
+        // No token → caller isn't using FB-stack shape. Treat normally.
+        let qp = json!({
+            "page_id": {"selectedValue": "1057513914104696", "name": "House of wellness"}
+        });
+        let arr = build_query_params_array(qp).unwrap();
+        assert_eq!(arr[0]["value"], "1057513914104696");
+    }
+
+    #[test]
+    fn page_id_queryparams_pre_packed_value_not_double_encoded() {
+        // Caller already JSON-stringified value themselves → don't re-pack.
+        let pre = r#"{"selectedValue":"1057513914104696","token":"EAA"}"#;
+        let qp = json!({
+            "page_id": {"value": pre, "token": "EAA", "selectedValue": "1057513914104696"}
+        });
+        let arr = build_query_params_array(qp).unwrap();
+        // The caller-provided value should win; not double-encoded.
+        assert_eq!(arr[0]["value"], pre);
+    }
+
+    #[test]
+    fn other_filter_ids_never_autopacked() {
+        // ig_user_id has no JSON.parse contract — must not be packed even with token.
+        let qp = json!({
+            "ig_user_id": {"selectedValue": "178414...", "token": "EAA"}
+        });
+        let arr = build_query_params_array(qp).unwrap();
+        assert_eq!(arr[0]["value"], "178414...");
+    }
+
+    #[test]
+    fn test_integration_values_page_id_autopacked() {
+        let body = normalize_test_integration_body(json!({
+            "values": [
+                {"column_name": "page_id", "selectedValue": "1057513914104696", "token": "EAA"},
+                {"column_name": "since", "value": "2026-01-01"}
+            ]
+        }));
+        let values = body["values"].as_array().unwrap();
+        let packed = values[0]["value"].as_str().expect("page_id value must be packed JSON string");
+        let parsed: Value = serde_json::from_str(packed).unwrap();
+        assert_eq!(parsed["selectedValue"], "1057513914104696");
+        assert_eq!(parsed["token"], "EAA");
+        // Other entries left alone.
+        assert_eq!(values[1]["value"], "2026-01-01");
+    }
+
+    #[test]
+    fn test_integration_values_page_id_already_stringified_untouched() {
+        let pre = r#"{"selectedValue":"1057513914104696","token":"EAA"}"#;
+        let body = normalize_test_integration_body(json!({
+            "values": [
+                {"column_name": "page_id", "value": pre, "token": "EAA", "selectedValue": "1057513914104696"}
+            ]
+        }));
+        assert_eq!(body["values"][0]["value"], pre);
+    }
 }

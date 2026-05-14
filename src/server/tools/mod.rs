@@ -144,7 +144,7 @@ pub async fn call_tool(name: &str, arguments: Value) -> ToolResult {
     }
 
     // Generation tools
-    if name.starts_with("gamma-") || name.starts_with("nanobanana-") {
+    if name.starts_with("gamma-") || name.starts_with("nanobanana-") || name.starts_with("seedance-") {
         return generate::call(name, arguments).await;
     }
 
@@ -226,6 +226,8 @@ pub async fn call_tool(name: &str, arguments: Value) -> ToolResult {
         || name == "update-val-linkage"
         || name == "list-val-integrations" || name == "list-val-integration-tables"
         || name == "get-val-integration" || name == "get-val-integration-fields"
+        || name == "list-val-integration-filters"
+        || name == "get-val-integration-filter-values"
         || name == "save-val-integration" || name == "test-val-integration"
         || name == "extract-val-integration" {
         return val_admin::call(name, arguments).await;
