@@ -552,6 +552,42 @@ pub async fn update_field(domain: &str, updates: Value) -> CmdResult<Value> {
     post_json(domain, "update-val-field", "/db/admin-fields/updateField", body).await
 }
 
+/// DESTRUCTIVE — delete a field DEFINITION globally.
+/// GET /db/admin-fields/deleteField?column_name=<physical_column_name>
+///
+/// This is NOT `remove_table_field` (which only detaches a column from ONE
+/// table and leaves the definition intact). The val-services handler
+/// (`AdminHelper.deleteField`) internally calls `returnTablesWithField(column_name)`,
+/// removes the column from EVERY table that has it, then drops the row from
+/// `dft_nodefields_tbl`. Irreversible.
+///
+/// `column_name` MUST be the physical column name (e.g. `usr_e0babecdbd0fa_1_1`),
+/// NOT the display name — the underlying SQL matches `dft_nodefields_name` /
+/// `information_schema.columns.column_name` exactly. Use `list_fields` to
+/// resolve display → physical first.
+///
+/// The handler also destructures a `tables_affected` query param but never
+/// uses it (it always recomputes via `returnTablesWithField`), so we send
+/// only `column_name`. Returns `{ "message": "success" }` on success.
+pub async fn delete_field(domain: &str, column_name: &str) -> CmdResult<Value> {
+    let column_name = column_name.trim();
+    if column_name.is_empty() {
+        return Err(CommandError::Config(
+            "'column_name' cannot be empty — pass the PHYSICAL column name (e.g. \
+             'usr_e0babecdbd0fa_1_1'), not the display name. Use list-val-fields \
+             to resolve display → physical first."
+                .to_string(),
+        ));
+    }
+    get_json_with_query(
+        domain,
+        "delete-val-field",
+        "/db/admin-fields/deleteField",
+        vec![("column_name".to_string(), column_name.to_string())],
+    )
+    .await
+}
+
 /// Add tables to a zone — additive, preserves all existing zone members.
 /// POST /db/admin-phase/updateTableAssignment
 ///

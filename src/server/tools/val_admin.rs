@@ -374,6 +374,34 @@ pub fn tools() -> Vec<Tool> {
             ),
         },
         Tool {
+            name: "delete-val-field".to_string(),
+            description:
+                "DESTRUCTIVE & IRREVERSIBLE. Delete a field DEFINITION globally: removes the \
+                 column from EVERY table that has it, then drops the field from \
+                 `dft_nodefields_tbl`. This is NOT `remove-val-table-field` — that only \
+                 detaches a column from ONE table and the definition survives. This one nukes \
+                 the field everywhere across the domain. \
+                 \
+                 `column_name` MUST be the *physical* column name (e.g. \
+                 `usr_e0babecdbd0fa_1_1`), NOT the display name (e.g. 'invoice_number'). \
+                 Use `list-val-fields` to resolve display → physical first. \
+                 \
+                 **Strongly recommended:** call `find-val-tables-with-field` first to see the \
+                 full blast radius (every table that will lose this column) before deleting. \
+                 Returns `{ \"message\": \"success\" }`."
+                    .to_string(),
+            input_schema: InputSchema::with_properties(
+                json!({
+                    "domain": { "type": "string", "description": "VAL domain name" },
+                    "column_name": {
+                        "type": "string",
+                        "description": "Required. The PHYSICAL column name to delete (e.g. usr_e0babecdbd0fa_1_1). Display names (e.g. 'invoice_number') will NOT match — use list-val-fields to resolve display→physical first. The field is removed from every table that has it, then the definition is dropped from dft_nodefields_tbl. Irreversible."
+                    }
+                }),
+                vec!["domain".to_string(), "column_name".to_string()],
+            ),
+        },
+        Tool {
             name: "add-val-table-field".to_string(),
             description:
                 "Add a single new field (column) to a VAL table. \
@@ -1241,6 +1269,15 @@ pub async fn call(name: &str, args: Value) -> ToolResult {
             match val_admin::find_tables_with_field(&domain, filters).await {
                 Ok(v) => ToolResult::json(&v),
                 Err(e) => ToolResult::error(format!("find-val-tables-with-field failed: {}", e)),
+            }
+        }
+
+        "delete-val-field" => {
+            let domain = require_str!(args, "domain");
+            let column_name = require_str!(args, "column_name");
+            match val_admin::delete_field(&domain, &column_name).await {
+                Ok(v) => ToolResult::json(&v),
+                Err(e) => ToolResult::error(format!("delete-val-field failed: {}", e)),
             }
         }
 

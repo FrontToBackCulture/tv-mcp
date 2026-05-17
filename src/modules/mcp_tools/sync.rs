@@ -105,6 +105,7 @@ fn categorize(name: &str) -> &'static str {
         || name == "add-val-table-field"
         || name == "add-val-table-fields"
         || name == "remove-val-table-field"
+        || name == "delete-val-field"
         || name == "update-val-field"
         || name == "list-val-fields"
         || name == "find-val-tables-with-field"
